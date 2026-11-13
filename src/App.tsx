@@ -3,6 +3,8 @@ import {
   Calendar,
   CheckCircle2,
   Clock,
+  Cloud,
+  CloudOff,
   Download,
   FolderTree,
   Globe,
@@ -10,12 +12,14 @@ import {
   Home,
   Hourglass,
   Kanban,
+  LogOut,
   Megaphone,
   Search,
   Table2,
   Upload,
   UserPen,
 } from 'lucide-react';
+import type { User } from 'firebase/auth';
 import bundledSeedData from '@/src/data/kishi-data.json';
 import {
   CampaignSetupModal,
@@ -38,7 +42,20 @@ import {
   TaskModal,
   TempoSettingsModal,
 } from '@/src/components/Modals';
+import { LoginScreen } from '@/src/components/LoginScreen';
 import { OverviewModule } from '@/src/components/OverviewModule';
+import { OfflineIndicator, PWAInstallButton } from '@/src/components/PWAInstallButton';
+import {
+  createWorkspaceDoc,
+  reloadCurrentUser,
+  resendVerificationEmail,
+  sendResetPassword,
+  signInWithEmail,
+  signOutFirebase,
+  subscribeToAuth,
+  subscribeWorkspaceDoc,
+  updateWorkspaceDoc,
+} from '@/src/services/firebaseSync';
 import { DEFAULT_TIME_RULES } from '@/src/utils/timeEstimator';
 import {
   deleteUploadedSheetFile,
@@ -187,6 +204,20 @@ export default function App() {
     stateRef.current = state;
   }, [state]);
 
+  const [authUser, setAuthUser] = useState<User | null>(null);
+  const [authReady, setAuthReady] = useState(false);
+  const [emailVerified, setEmailVerified] = useState(false);
+  const [cloudStatus, setCloudStatus] = useState<'disconnected' | 'syncing' | 'synced' | 'error'>(
+    'disconnected',
+  );
+  const authUserRef = useRef<User | null>(null);
+  const cloudDocReadyRef = useRef(false);
+  const lastCloudHashRef = useRef('');
+
+  useEffect(() => {
+    authUserRef.current = authUser;
+  }, [authUser]);
+
   const lastAutoSyncAtRef = useRef<number>(0);
 
   const commitState = useCallback(
@@ -194,6 +225,18 @@ export default function App() {
       setState((prev) => {
         const next = updater(prev);
         void persistKishiState(next);
+        const currentUid = authUserRef.current?.uid;
+        if (currentUid && authUserRef.current?.emailVerified && cloudDocReadyRef.current) {
+          try {
+            lastCloudHashRef.current = JSON.stringify(next);
+          } catch {
+            // ignore hash stringify edge cases
+          }
+          void updateWorkspaceDoc(currentUid, next).catch((err) => {
+            console.error('Erro ao sincronizar alteração na nuvem:', err);
+            setCloudStatus('error');
+          });
+        }
         return next;
       });
     },
@@ -248,7 +291,7 @@ export default function App() {
     [],
   );
 
-  // Initial load from /api/data (src/data/kishi-data.json)
+  // Initial load from /api/data or local cache
   useEffect(() => {
     let mounted = true;
     fetchKishiState().then(({ state: loaded }) => {
@@ -265,6 +308,106 @@ export default function App() {
       mounted = false;
     };
   }, [applyDayRollover, showToast]);
+
+  // Firebase Auth listener
+  useEffect(() => {
+    const unsubAuth = subscribeToAuth((user) => {
+      setAuthUser(user);
+      setEmailVerified(Boolean(user?.emailVerified));
+      setAuthReady(true);
+      if (!user) {
+        cloudDocReadyRef.current = false;
+        lastCloudHashRef.current = '';
+        setCloudStatus('disconnected');
+      }
+    });
+    return () => unsubAuth();
+  }, []);
+
+  // Real-time Firestore cross-device sync (PC <-> Mobile in the same second)
+  useEffect(() => {
+    if (!authReady || !authUser || !emailVerified || !isLoaded) return;
+
+    setCloudStatus('syncing');
+    const unsubDoc = subscribeWorkspaceDoc(authUser.uid, {
+      onRemoteData: (remoteState, hasPendingWrites) => {
+        cloudDocReadyRef.current = true;
+        setCloudStatus('synced');
+        const { next, rolledOver } = applyDayRollover(remoteState);
+        let nextHash = '';
+        try {
+          nextHash = JSON.stringify(next);
+        } catch {
+          nextHash = String(Date.now());
+        }
+        if (nextHash !== lastCloudHashRef.current) {
+          lastCloudHashRef.current = nextHash;
+          setState(next);
+          void persistKishiState(next);
+          if (rolledOver && !hasPendingWrites) {
+            void updateWorkspaceDoc(authUser.uid, next).catch(() => undefined);
+          }
+        }
+      },
+      onMissingDoc: () => {
+        setCloudStatus('syncing');
+        void createWorkspaceDoc(authUser.uid, stateRef.current)
+          .then(() => {
+            cloudDocReadyRef.current = true;
+            setCloudStatus('synced');
+          })
+          .catch((err) => {
+            console.error('Erro ao criar workspace inicial na nuvem:', err);
+            setCloudStatus('error');
+          });
+      },
+      onError: (err) => {
+        console.error('Erro na sincronização em tempo real:', err);
+        setCloudStatus('error');
+      },
+    });
+
+    return () => {
+      unsubDoc();
+    };
+  }, [authReady, authUser, emailVerified, isLoaded, applyDayRollover]);
+
+  async function handleEmailSignIn(email: string, password: string) {
+    const loggedUser = await signInWithEmail(email, password);
+    setAuthUser(loggedUser);
+    setEmailVerified(Boolean(loggedUser.emailVerified));
+    if (loggedUser.emailVerified) {
+      showToast('Acesso liberado! Sincronização automática ativada.');
+    }
+  }
+
+  async function handleCheckVerification() {
+    const refreshed = await reloadCurrentUser();
+    if (refreshed) {
+      setAuthUser(refreshed);
+      setEmailVerified(Boolean(refreshed.emailVerified));
+      if (refreshed.emailVerified) {
+        showToast('E-mail confirmado! Sincronização automática ativada.');
+      } else {
+        throw new Error('not-verified-yet');
+      }
+    }
+  }
+
+  async function handleResendVerification() {
+    if (!authUser) return;
+    await resendVerificationEmail(authUser);
+  }
+
+  async function handleDisconnectCloud() {
+    try {
+      await signOutFirebase();
+      setProfileMenuOpen(false);
+      showToast('Você saiu da sua conta.');
+    } catch {
+      showToast('Erro ao sair da conta.');
+    }
+  }
 
   // Periodic day rollover & date header check
   useEffect(() => {
@@ -341,6 +484,15 @@ export default function App() {
           ),
         };
         void persistKishiState(nextState);
+        const currentUid = authUserRef.current?.uid;
+        if (currentUid && authUserRef.current?.emailVerified && cloudDocReadyRef.current) {
+          try {
+            lastCloudHashRef.current = JSON.stringify(nextState);
+          } catch {
+            // ignore
+          }
+          void updateWorkspaceDoc(currentUid, nextState).catch(() => undefined);
+        }
         return nextState;
       });
 
@@ -1462,6 +1614,32 @@ export default function App() {
     timeRules: DEFAULT_TIME_RULES,
   };
 
+  if (!authReady) {
+    return (
+      <div className="min-h-screen bg-[#0f1512] text-[#EDE9DE] flex flex-col items-center justify-center gap-3 p-6">
+        <div className="h-12 w-12 rounded-2xl bg-[#0b100d] border border-[#C5A66B]/45 flex items-center justify-center">
+          <KishiLogoSvg className="h-7 w-7 text-[#C5A66B] animate-pulse" />
+        </div>
+        <span className="font-extrabold text-sm tracking-[0.25em] text-[#EDE9DE] font-['Montserrat',sans-serif]">
+          KISHI
+        </span>
+      </div>
+    );
+  }
+
+  if (!authUser || !emailVerified) {
+    return (
+      <LoginScreen
+        pendingVerificationUser={authUser && !emailVerified ? authUser : null}
+        onSignIn={handleEmailSignIn}
+        onResetPassword={sendResetPassword}
+        onResendVerification={handleResendVerification}
+        onCheckVerification={handleCheckVerification}
+        onSignOut={handleDisconnectCloud}
+      />
+    );
+  }
+
   return (
     <div className="flex flex-col h-screen bg-[#0f1512] text-[#EDE9DE] overflow-hidden">
       {/* TOPBAR */}
@@ -1599,23 +1777,67 @@ export default function App() {
           )}
         </div>
 
-        {/* Perfil */}
-        <div ref={profileBoxRef} className="relative shrink-0">
-          <button
-            type="button"
-            onClick={() => setProfileMenuOpen((v) => !v)}
-            className="btn-press h-9 w-9 rounded-full bg-[#C5A66B] text-[#0f1512] font-extrabold text-sm flex items-center justify-center hover:bg-[#d5b880] shadow-md focus:outline-none border border-[#C5A66B]/30 cursor-pointer"
-            aria-label="Menu do perfil"
-          >
-            {state.user.initial || 'J'}
-          </button>
+        {/* Ações direita: Instalar PWA + Sync Nuvem + Perfil */}
+        <div className="flex items-center gap-2 shrink-0">
+          <PWAInstallButton compact />
 
-          {profileMenuOpen && (
-            <div className="absolute right-0 top-11 w-64 bg-[#151d18] border border-[#777F89]/60 rounded-2xl p-3 z-50 shadow-2xl space-y-1.5 text-xs">
-              <div className="pb-2 border-b border-[#777F89]/40">
-                <div className="font-bold text-[#EDE9DE]">{state.user.name}</div>
-                <div className="text-[11px] text-[#A9B99D] font-mono">{state.user.role}</div>
-              </div>
+          {authUser && (
+            <button
+              type="button"
+              onClick={() => setProfileMenuOpen((v) => !v)}
+              className="hidden sm:flex items-center gap-1.5 px-2 py-1 rounded-lg bg-[#151d18] border border-[#777F89]/35 text-[10px] font-mono text-[#A9B99D] cursor-pointer"
+              title={
+                cloudStatus === 'synced'
+                  ? `Sincronizado em tempo real (${authUser.email || 'Conta privada'})`
+                  : cloudStatus === 'error'
+                    ? 'Erro ao sincronizar na nuvem'
+                    : 'Sincronizando...'
+              }
+            >
+              {cloudStatus === 'error' ? (
+                <CloudOff className="w-3 h-3 text-rose-400" />
+              ) : (
+                <Cloud
+                  className={`w-3 h-3 ${
+                    cloudStatus === 'synced' ? 'text-emerald-400' : 'text-[#C5A66B] animate-pulse'
+                  }`}
+                />
+              )}
+              <span>{cloudStatus === 'synced' ? 'Sincronizado' : cloudStatus === 'error' ? 'Erro sync' : 'Sync...'}</span>
+            </button>
+          )}
+
+          {/* Perfil */}
+          <div ref={profileBoxRef} className="relative shrink-0">
+            <button
+              type="button"
+              onClick={() => setProfileMenuOpen((v) => !v)}
+              className="btn-press h-9 w-9 rounded-full bg-[#C5A66B] text-[#0f1512] font-extrabold text-sm flex items-center justify-center hover:bg-[#d5b880] shadow-md focus:outline-none border border-[#C5A66B]/30 cursor-pointer"
+              aria-label="Menu do perfil"
+            >
+              {state.user.initial || 'J'}
+            </button>
+
+            {profileMenuOpen && (
+              <div className="absolute right-0 top-11 w-64 bg-[#151d18] border border-[#777F89]/60 rounded-2xl p-3 z-50 shadow-2xl space-y-1.5 text-xs">
+                <div className="pb-2 border-b border-[#777F89]/40">
+                  <div className="font-bold text-[#EDE9DE]">{state.user.name}</div>
+                  <div className="text-[11px] text-[#A9B99D] font-mono">{state.user.role}</div>
+                  {authUser && (
+                    <div className="mt-1.5 flex items-center justify-between gap-2 text-[10px] font-mono text-emerald-300 bg-[#0b100d] px-2 py-1 rounded-lg border border-emerald-500/30">
+                      <span className="truncate">{authUser.email || 'Conectada'}</span>
+                      <button
+                        type="button"
+                        onClick={() => void handleDisconnectCloud()}
+                        className="text-rose-300 hover:text-rose-200 shrink-0 cursor-pointer flex items-center gap-1"
+                        title="Sair da conta"
+                      >
+                        <LogOut className="w-3 h-3" />
+                      </button>
+                    </div>
+                  )}
+                </div>
+                <PWAInstallButton />
               <button
                 type="button"
                 onClick={() => {
@@ -1680,6 +1902,7 @@ export default function App() {
               </label>
             </div>
           )}
+          </div>
         </div>
       </header>
 
@@ -2059,9 +2282,12 @@ export default function App() {
         onConfirm={(val) => promptDialog.onConfirm?.(val)}
       />
 
+      {/* INDICADOR OFFLINE PWA */}
+      <OfflineIndicator />
+
       {/* TOAST */}
       {toastMsg && (
-        <div className="fixed bottom-6 right-6 z-50">
+        <div className="fixed bottom-20 md:bottom-6 right-6 z-50">
           <div className="bg-[#151d18] border border-[#C5A66B]/60 text-[#EDE9DE] px-4 py-3 rounded-2xl shadow-2xl flex items-center gap-3 text-xs font-semibold">
             <CheckCircle2 className="w-4 h-4 text-[#C5A66B] shrink-0" />
             <span>{toastMsg}</span>

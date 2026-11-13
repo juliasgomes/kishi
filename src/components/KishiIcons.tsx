@@ -39,25 +39,73 @@ export function ChatDotAntSvg({ className = 'w-4 h-4 text-[#C5A66B]' }: { classN
   return (
     <svg
       className={className}
-      viewBox="0 0 24 24"
+      viewBox="0 0 32 32"
       fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
       aria-hidden="true"
     >
-      <ellipse cx="12" cy="17" rx="3.5" ry="4.5" fill="currentColor" opacity="0.85" />
-      <ellipse cx="12" cy="10.5" rx="2.5" ry="3" fill="currentColor" />
-      <circle cx="12" cy="5" r="2.2" fill="currentColor" />
-      <path d="M10 3.5 L7 1" />
-      <path d="M14 3.5 L17 1" />
-      <path d="M9.5 9.5 L4 7" />
-      <path d="M14.5 9.5 L20 7" />
-      <path d="M9.5 12 L3 13.5" />
-      <path d="M14.5 12 L21 13.5" />
-      <path d="M10 16 L5 20.5" />
-      <path d="M14 16 L19 20.5" />
+      {/* Antenas dobradas (típicas de formiga) */}
+      <path
+        d="M8.5 8.5 L6.8 4.4 L3.6 3.8"
+        stroke="currentColor"
+        strokeWidth="1.9"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M11 8.4 L11.8 4.2 L14.8 3.4"
+        stroke="currentColor"
+        strokeWidth="1.9"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+
+      {/* 3 pares de patinhas articuladas */}
+      <path
+        d="M14.2 16.2 L11.8 21.4 L9.2 25.2"
+        stroke="currentColor"
+        strokeWidth="1.9"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M16.2 16.8 L16.2 22 L15 26.2"
+        stroke="currentColor"
+        strokeWidth="1.9"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M18.4 16.4 L21.4 21.4 L23.8 25.6"
+        stroke="currentColor"
+        strokeWidth="1.9"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+
+      {/* Conectores (cintura fina de formiga) */}
+      <path
+        d="M11.8 12.6 L14.2 14.2 M18.4 15.2 L20.4 16"
+        stroke="currentColor"
+        strokeWidth="2.1"
+        strokeLinecap="round"
+      />
+
+      {/* Cabeça */}
+      <circle cx="9.6" cy="11.6" r="3.6" fill="currentColor" />
+      <circle cx="8.4" cy="10.8" r="0.85" fill="#0b100d" />
+
+      {/* Tórax */}
+      <ellipse cx="16.2" cy="14.6" rx="3" ry="2.4" fill="currentColor" />
+
+      {/* Abdômen (gáster) empinado */}
+      <ellipse
+        cx="24"
+        cy="17.6"
+        rx="5.2"
+        ry="4.1"
+        transform="rotate(-18 24 17.6)"
+        fill="currentColor"
+      />
     </svg>
   );
 }

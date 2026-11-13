@@ -1,0 +1,91 @@
+{
+  "entities": {
+    "Workspace": {
+      "title": "Workspace",
+      "description": "Operational KISHI workspace state synced in real time across devices for the authenticated owner.",
+      "type": "object",
+      "properties": {
+        "ownerId": {
+          "type": "string",
+          "description": "Firebase Auth UID of the workspace owner.",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_-]+$"
+        },
+        "lastDateStr": {
+          "type": "string",
+          "description": "Last active Brasília date string (DD/MM/YYYY) for daily task rollover.",
+          "maxLength": 20
+        },
+        "user": {
+          "type": "object",
+          "description": "Display profile metadata (name, initial, role)."
+        },
+        "portals": {
+          "type": "array",
+          "description": "Saved operational portals and apps."
+        },
+        "sheets": {
+          "type": "array",
+          "description": "Linked Google Sheets and uploaded spreadsheets."
+        },
+        "campaigns": {
+          "type": "object",
+          "description": "Legacy campaign buckets (drv, food)."
+        },
+        "activeCampaigns": {
+          "type": "array",
+          "description": "Active 99 Rides & Food campaigns with waves and to-dos."
+        },
+        "channels": {
+          "type": "object",
+          "description": "Folder channel directories and common checklists for rides and food."
+        },
+        "tasks": {
+          "type": "array",
+          "description": "Daily and Kanban operational tasks."
+        },
+        "history": {
+          "type": "array",
+          "description": "Permanent history log of completed tasks."
+        },
+        "timeBank": {
+          "type": "object",
+          "description": "Work shift schedule, Brasília bank settings, and time estimation rules."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when the workspace document was created."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of the last workspace update."
+        }
+      },
+      "required": [
+        "ownerId",
+        "lastDateStr",
+        "user",
+        "portals",
+        "sheets",
+        "campaigns",
+        "activeCampaigns",
+        "channels",
+        "tasks",
+        "history",
+        "timeBank",
+        "createdAt",
+        "updatedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/workspaces/{userId}": {
+      "schema": {
+        "$ref": "#/entities/Workspace"
+      },
+      "description": "Per-user KISHI operational workspace synced in real time across PC and mobile devices."
+    }
+  }
+}

@@ -301,31 +301,28 @@ export function DailyBriefingMural({
 
   return (
     <div className="bg-gradient-to-br from-[#151d18] via-[#131a16] to-[#0f1512] border border-[#C5A66B]/35 rounded-2xl p-4 sm:p-5 shadow-lg space-y-3.5">
-      {/* Cabeçalho do Mural */}
+      {/* Cabeçalho */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div className="flex items-start sm:items-center gap-3 min-w-0">
           <div className="h-10 w-10 rounded-xl bg-[#0b100d] border border-[#C5A66B]/45 flex items-center justify-center shrink-0 shadow-sm">
             <ChatDotAntSvg className="w-5 h-5 text-[#C5A66B]" />
           </div>
           <div className="min-w-0">
-            <div className="flex items-center gap-2 flex-wrap">
+            <div className="flex items-center gap-2.5 flex-wrap">
               <span className="text-xs sm:text-sm font-extrabold text-[#EDE9DE]">
                 {greeting}, {displayName}!
               </span>
-              <span className="text-[10px] font-mono font-semibold text-[#C5A66B] bg-[#C5A66B]/10 border border-[#C5A66B]/30 px-2 py-0.5 rounded-md">
-                Mural do Dia
-              </span>
-              <span className="text-[10px] font-mono text-[#A9B99D] bg-[#0b100d] border border-[#777F89]/35 px-2 py-0.5 rounded-md tabular-nums">
-                Brasília {workStats.brasiliaTimeFormatted}
+              <span
+                className="inline-flex items-center gap-1 text-xs font-mono font-semibold text-[#C5A66B] tabular-nums"
+                title="Relógio de Brasília"
+              >
+                <Clock className="w-3.5 h-3.5 text-[#C5A66B]" />
+                <span>{workStats.brasiliaTimeFormatted}</span>
               </span>
             </div>
-            {collapsed ? (
+            {collapsed && (
               <p className="text-[11px] text-[#A9B99D] mt-0.5 truncate">
                 {summary.pendingTasksCount} tarefa(s) · {summary.unextractedCount} não extraído(s) · Estimado: {formatDuration(summary.totalEstimatedMinutes)} · Restam no trabalho: {formatDuration(workStats.totalAvailableMinutes)}
-              </p>
-            ) : (
-              <p className="text-[11px] text-[#A9B99D] mt-0.5">
-                Panorama automático de tarefas, extrações pendentes e tempo restante no expediente.
               </p>
             )}
           </div>
@@ -349,8 +346,8 @@ export function DailyBriefingMural({
             type="button"
             onClick={toggleCollapsed}
             className="btn-press h-8 w-8 rounded-xl bg-[#0b100d] hover:bg-[#1b251f] border border-[#777F89]/50 text-[#A9B99D] hover:text-[#EDE9DE] flex items-center justify-center cursor-pointer"
-            title={collapsed ? 'Expandir mural do dia' : 'Recolher mural do dia'}
-            aria-label={collapsed ? 'Expandir mural do dia' : 'Recolher mural do dia'}
+            title={collapsed ? 'Expandir resumo' : 'Recolher resumo'}
+            aria-label={collapsed ? 'Expandir resumo' : 'Recolher resumo'}
           >
             {collapsed ? <ChevronDown className="w-4 h-4" /> : <ChevronUp className="w-4 h-4" />}
           </button>
@@ -388,9 +385,6 @@ export function DailyBriefingMural({
               <div className="text-base sm:text-lg font-extrabold font-mono tabular-nums text-[#EDE9DE]">
                 {summary.pendingTasksCount}
               </div>
-              <div className="text-[10px] font-mono text-[#A9B99D] truncate">
-                {summary.inProgressCount} andamento · {doneTodayCount} feitas
-              </div>
             </div>
 
             <button
@@ -405,9 +399,6 @@ export function DailyBriefingMural({
               <div className="text-base sm:text-lg font-extrabold font-mono tabular-nums text-rose-300">
                 {summary.unextractedCount}
               </div>
-              <div className="text-[10px] font-mono text-[#A9B99D] truncate">
-                {summary.foodPendingWaves} Food · {summary.ridesPendingWaves} Rides
-              </div>
             </button>
 
             <div className="p-3 rounded-xl bg-[#0b100d] border border-[#777F89]/35 space-y-1">
@@ -417,11 +408,6 @@ export function DailyBriefingMural({
               </div>
               <div className="text-base sm:text-lg font-extrabold font-mono tabular-nums text-[#C5A66B]">
                 {formatDuration(summary.totalEstimatedMinutes)}
-              </div>
-              <div className="text-[10px] font-mono text-[#A9B99D] truncate">
-                {summary.totalEstimatedMinutes === 0
-                  ? 'Tudo zerado'
-                  : `${formatDuration(summary.tasksMinutes)} hoje · ${formatDuration(summary.wavesMinutes)} extrair`}
               </div>
             </div>
 
@@ -440,17 +426,6 @@ export function DailyBriefingMural({
               </div>
               <div className="text-base sm:text-lg font-extrabold font-mono tabular-nums text-[#EDE9DE]">
                 {formatDuration(workStats.totalAvailableMinutes)}
-              </div>
-              <div
-                className={`text-[10px] font-mono font-semibold truncate ${
-                  fitsInBank ? 'text-emerald-300' : 'text-amber-300'
-                }`}
-              >
-                {summary.totalEstimatedMinutes > 0
-                  ? fitsInBank
-                    ? `Folga de ${formatDuration(summary.balanceMinutes)}`
-                    : `Falta ${formatDuration(Math.abs(summary.balanceMinutes))}`
-                  : `No trabalho: ${formatDuration(workStats.workedMinutes)}`}
               </div>
             </div>
           </div>

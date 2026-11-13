@@ -1,0 +1,143 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isVerifiedUser() {
+      return isSignedIn() && request.auth.token.email_verified == true;
+    }
+
+    function isOwner(userId) {
+      return isVerifiedUser() && request.auth.uid == userId;
+    }
+
+    function isValidWorkspaceUser(u) {
+      return u is map
+        && u.keys().hasAll(['name', 'initial', 'role'])
+        && u.keys().hasOnly(['name', 'initial', 'role'])
+        && u.name is string && u.name.size() >= 1 && u.name.size() <= 80
+        && u.initial is string && u.initial.size() >= 1 && u.initial.size() <= 4
+        && u.role is string && u.role.size() <= 120;
+    }
+
+    function isValidWorkspace(data) {
+      return data.keys().hasAll([
+          'ownerId',
+          'lastDateStr',
+          'user',
+          'portals',
+          'sheets',
+          'campaigns',
+          'activeCampaigns',
+          'channels',
+          'tasks',
+          'history',
+          'timeBank',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.keys().hasOnly([
+          'ownerId',
+          'lastDateStr',
+          'user',
+          'portals',
+          'sheets',
+          'campaigns',
+          'activeCampaigns',
+          'channels',
+          'tasks',
+          'history',
+          'timeBank',
+          'createdAt',
+          'updatedAt'
+        ])
+        && data.ownerId is string
+        && data.ownerId.size() <= 128
+        && data.ownerId == request.auth.uid
+        && data.lastDateStr is string
+        && data.lastDateStr.size() <= 20
+        && isValidWorkspaceUser(data.user)
+        && data.portals is list
+        && data.portals.size() <= 100
+        && (data.portals.size() == 0 || data.portals[0] is map)
+        && data.sheets is list
+        && data.sheets.size() <= 200
+        && (data.sheets.size() == 0 || data.sheets[0] is map)
+        && data.campaigns is map
+        && data.campaigns.keys().hasAll(['drv', 'food'])
+        && data.campaigns.keys().hasOnly(['drv', 'food'])
+        && data.campaigns.drv is list
+        && data.campaigns.drv.size() <= 100
+        && (data.campaigns.drv.size() == 0 || data.campaigns.drv[0] is map)
+        && data.campaigns.food is list
+        && data.campaigns.food.size() <= 100
+        && (data.campaigns.food.size() == 0 || data.campaigns.food[0] is map)
+        && data.activeCampaigns is list
+        && data.activeCampaigns.size() <= 100
+        && (data.activeCampaigns.size() == 0 || data.activeCampaigns[0] is map)
+        && data.channels is map
+        && data.channels.keys().hasAll(['rides', 'food'])
+        && data.channels.keys().hasOnly(['rides', 'food'])
+        && data.channels.rides is map
+        && data.channels.food is map
+        && data.tasks is list
+        && data.tasks.size() <= 500
+        && (data.tasks.size() == 0 || data.tasks[0] is map)
+        && data.history is list
+        && data.history.size() <= 1000
+        && (data.history.size() == 0 || data.history[0] is map)
+        && data.timeBank is map
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    match /workspaces/{userId} {
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow list: if isVerifiedUser() && resource.data.ownerId == request.auth.uid;
+      allow create: if isValidId(userId)
+        && isOwner(userId)
+        && isValidWorkspace(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isValidId(userId)
+        && isOwner(userId)
+        && isValidWorkspace(incoming())
+        && incoming().ownerId == existing().ownerId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'lastDateStr',
+          'user',
+          'portals',
+          'sheets',
+          'campaigns',
+          'activeCampaigns',
+          'channels',
+          'tasks',
+          'history',
+          'timeBank',
+          'updatedAt'
+        ]);
+      allow delete: if isValidId(userId) && isOwner(userId);
+    }
+  }
+}
