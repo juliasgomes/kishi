@@ -1,9 +1,43 @@
 import bundledSeedData from '@/src/data/kishi-data.json';
-import type { KishiCommonTask, KishiState, KishiTimeRule } from '@/src/types/kishi';
+import type {
+  KishiChannel,
+  KishiCommonTask,
+  KishiState,
+  KishiTimeRule,
+} from '@/src/types/kishi';
 import { DEFAULT_TIME_RULES } from '@/src/utils/timeEstimator';
 import { getBrasiliaTimeParts } from '@/src/utils/workHours';
 
-const LOCAL_CACHE_KEY = 'kishi_storage_v1';
+const LEGACY_LOCAL_CACHE_KEY = 'kishi_storage_v1';
+const LOCAL_CACHE_PREFIX = 'kishi_ws_v2_';
+
+function getLocalCacheKey(uid?: string): string | null {
+  if (!uid || !uid.trim()) return null;
+  return `${LOCAL_CACHE_PREFIX}${uid.trim()}`;
+}
+
+export function clearSensitiveLocalCaches(uid?: string): void {
+  try {
+    localStorage.removeItem(LEGACY_LOCAL_CACHE_KEY);
+    localStorage.removeItem('kishi_mural_collapsed_v1');
+    if (uid) {
+      localStorage.removeItem(`${LOCAL_CACHE_PREFIX}${uid.trim()}`);
+    }
+    for (let i = localStorage.length - 1; i >= 0; i -= 1) {
+      const key = localStorage.key(i);
+      if (key && key.startsWith(LOCAL_CACHE_PREFIX)) {
+        localStorage.removeItem(key);
+      }
+    }
+  } catch {
+    // ignore storage errors
+  }
+  try {
+    sessionStorage.clear();
+  } catch {
+    // ignore sessionStorage errors
+  }
+}
 
 export function getFormattedToday(): string {
   return getBrasiliaTimeParts().formattedDate;
@@ -15,6 +49,37 @@ export function getFormattedTimeNow(): string {
 
 export function getFormattedDateHeader(): string {
   return getBrasiliaTimeParts().formattedDateHeader;
+}
+
+function normalizeChannelList(
+  items: unknown,
+  fallbackType: 'Interno' | 'Externo',
+): KishiChannel[] {
+  if (!Array.isArray(items)) return [];
+  return items
+    .filter((item): item is Record<string, unknown> => Boolean(item && typeof item === 'object'))
+    .map((item) => ({
+      name: String(item.name || '').trim(),
+      url: String(item.url || '').trim(),
+      type:
+        item.type === 'Interno' || item.type === 'Externo'
+          ? item.type
+          : fallbackType,
+      monitorSheetUrl:
+        typeof item.monitorSheetUrl === 'string' && item.monitorSheetUrl.trim()
+          ? item.monitorSheetUrl.trim()
+          : undefined,
+      watchChanges: Boolean(item.watchChanges),
+      lastCsvHash:
+        typeof item.lastCsvHash === 'string' && item.lastCsvHash.trim()
+          ? item.lastCsvHash.trim()
+          : undefined,
+      lastSyncedAt:
+        typeof item.lastSyncedAt === 'string' && item.lastSyncedAt.trim()
+          ? item.lastSyncedAt.trim()
+          : undefined,
+    }))
+    .filter((ch) => Boolean(ch.name));
 }
 
 export function normalizeKishiState(raw: Partial<KishiState> | null | undefined): KishiState {
@@ -51,12 +116,14 @@ export function normalizeKishiState(raw: Partial<KishiState> | null | undefined)
     channels: {
       rides: {
         common: normalizeCommonTasks(raw?.channels?.rides?.common ?? seed.channels.rides.common),
-        internos: Array.isArray(raw?.channels?.rides?.internos)
-          ? raw.channels.rides.internos
-          : seed.channels.rides.internos,
-        externos: Array.isArray(raw?.channels?.rides?.externos)
-          ? raw.channels.rides.externos
-          : seed.channels.rides.externos,
+        internos: normalizeChannelList(
+          raw?.channels?.rides?.internos ?? seed.channels.rides.internos,
+          'Interno',
+        ),
+        externos: normalizeChannelList(
+          raw?.channels?.rides?.externos ?? seed.channels.rides.externos,
+          'Externo',
+        ),
         mediaPlan: {
           sheetName:
             raw?.channels?.rides?.mediaPlan?.sheetName ?? seed.channels.rides.mediaPlan.sheetName,
@@ -69,12 +136,14 @@ export function normalizeKishiState(raw: Partial<KishiState> | null | undefined)
       },
       food: {
         common: normalizeCommonTasks(raw?.channels?.food?.common ?? seed.channels.food.common),
-        internos: Array.isArray(raw?.channels?.food?.internos)
-          ? raw.channels.food.internos
-          : seed.channels.food.internos,
-        externos: Array.isArray(raw?.channels?.food?.externos)
-          ? raw.channels.food.externos
-          : seed.channels.food.externos,
+        internos: normalizeChannelList(
+          raw?.channels?.food?.internos ?? seed.channels.food.internos,
+          'Interno',
+        ),
+        externos: normalizeChannelList(
+          raw?.channels?.food?.externos ?? seed.channels.food.externos,
+          'Externo',
+        ),
         mediaPlan: {
           sheetName:
             raw?.channels?.food?.mediaPlan?.sheetName ?? seed.channels.food.mediaPlan.sheetName,
@@ -120,9 +189,22 @@ export function normalizeKishiState(raw: Partial<KishiState> | null | undefined)
       timeRules: Array.isArray(raw?.timeBank?.timeRules)
         ? normalizeTimeRules(raw.timeBank.timeRules)
         : DEFAULT_TIME_RULES,
+      sheetColorLabels: normalizeSheetColorLabels(raw?.timeBank?.sheetColorLabels),
     },
   };
   return base;
+}
+
+function normalizeSheetColorLabels(raw: unknown): Record<string, string> | undefined {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+  const out: Record<string, string> = {};
+  for (const [key, val] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof key === 'string' && typeof val === 'string') {
+      const trimmed = val.trim();
+      if (trimmed) out[key] = trimmed;
+    }
+  }
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 function normalizeTimeRules(items: unknown[]): KishiTimeRule[] {
@@ -158,50 +240,32 @@ function normalizeCommonTasks(items: unknown[]): KishiCommonTask[] {
   });
 }
 
-export async function fetchKishiState(): Promise<{ state: KishiState; source: 'repo' | 'bundled' }> {
-  try {
-    const response = await fetch('/api/data', { cache: 'no-store' });
-    const contentType = response.headers.get('content-type') || '';
-    if (response.ok && contentType.includes('application/json')) {
-      const parsed = (await response.json()) as Partial<KishiState>;
-      const normalized = normalizeKishiState(parsed);
-      try {
-        localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify(normalized));
-      } catch {
-        // ignore storage quota errors
+export async function fetchKishiState(
+  uid?: string,
+): Promise<{ state: KishiState; source: 'repo' | 'bundled' }> {
+  const cacheKey = getLocalCacheKey(uid);
+  if (cacheKey) {
+    try {
+      const cached = localStorage.getItem(cacheKey);
+      if (cached) {
+        return { state: normalizeKishiState(JSON.parse(cached)), source: 'bundled' };
       }
-      return { state: normalized, source: 'repo' };
+      // Remove any legacy unscoped cache from prior builds
+      localStorage.removeItem(LEGACY_LOCAL_CACHE_KEY);
+    } catch {
+      // ignore invalid cache
     }
-  } catch {
-    // fallback for static hosting without Node backend
-  }
-
-  try {
-    const cached = localStorage.getItem(LOCAL_CACHE_KEY);
-    if (cached) {
-      return { state: normalizeKishiState(JSON.parse(cached)), source: 'bundled' };
-    }
-  } catch {
-    // ignore invalid cache
   }
 
   return { state: normalizeKishiState(bundledSeedData as KishiState), source: 'bundled' };
 }
 
-export async function persistKishiState(nextState: KishiState): Promise<boolean> {
+export async function persistKishiState(nextState: KishiState, uid?: string): Promise<boolean> {
+  const cacheKey = getLocalCacheKey(uid);
+  if (!cacheKey) return false;
   try {
-    localStorage.setItem(LOCAL_CACHE_KEY, JSON.stringify(nextState));
-  } catch {
-    // ignore storage quota errors
-  }
-
-  try {
-    const response = await fetch('/api/data', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(nextState),
-    });
-    return response.ok;
+    localStorage.setItem(cacheKey, JSON.stringify(nextState));
+    return true;
   } catch {
     return false;
   }
@@ -209,31 +273,9 @@ export async function persistKishiState(nextState: KishiState): Promise<boolean>
 
 export async function uploadSheetFile(file: File): Promise<{ url: string; note: string }> {
   const base64 = await readFileAsBase64(file);
-
-  try {
-    const response = await fetch('/api/upload', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        filename: file.name,
-        contentBase64: base64,
-      }),
-    });
-
-    if (response.ok) {
-      const result = (await response.json()) as { url: string };
-      return {
-        url: result.url,
-        note: `${(file.size / 1024).toFixed(1)} KB • Salvo no código`,
-      };
-    }
-  } catch {
-    // static fallback below
-  }
-
   return {
     url: base64,
-    note: `${(file.size / 1024).toFixed(1)} KB • Arquivo Local`,
+    note: `${(file.size / 1024).toFixed(1)} KB • Arquivo Privado (Nuvem)`,
   };
 }
 
@@ -327,7 +369,10 @@ async function fetchGoogleSheetDirectInBrowser(
 
   for (const candidateUrl of candidates) {
     try {
-      const response = await fetch(candidateUrl, { redirect: 'follow' });
+      const response = await fetch(candidateUrl, {
+        redirect: 'follow',
+        cache: 'no-store',
+      });
       const contentType = response.headers.get('content-type') || '';
       const finalUrl = response.url || '';
       const bodyText = await response.text();

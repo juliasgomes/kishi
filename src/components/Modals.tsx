@@ -1,14 +1,18 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
+  CheckCircle2,
   Clock,
+  EyeOff,
   Hourglass,
   Plus,
-  Sparkles,
+  RefreshCw,
   Tag,
   Trash2,
   X,
 } from 'lucide-react';
+import { DuplicateLinkNotice } from '@/src/components/DuplicateLinkNotice';
+import { syncGoogleSheetUrl } from '@/src/services/kishiApi';
 import type {
   ChannelType,
   FolderKey,
@@ -32,11 +36,26 @@ import {
   getAllAvailableTags,
   matchTimeRule,
 } from '@/src/utils/timeEstimator';
-import { computeWorkHoursStats, formatDuration } from '@/src/utils/workHours';
+import { getSheetColorLabel, SHEET_COLOR_PALETTE } from '@/src/utils/sheetColors';
+import {
+  formatShortDateBR,
+  getBrasiliaTodayISO,
+  isMonthlyDayMatch,
+} from '@/src/utils/taskSchedule';
+import {
+  findDuplicateLinks,
+  isGoogleSheetsUrl,
+} from '@/src/utils/urlDuplicates';
+import {
+  computeWorkHoursStats,
+  formatDuration,
+  getBrasiliaTimeParts,
+} from '@/src/utils/workHours';
 
 interface TaskModalProps {
   open: boolean;
   editingTask: KishiTask | null;
+  defaultProduct?: ProductType;
   channels: KishiState['channels'];
   timeBank?: KishiTimeBank;
   onClose: () => void;
@@ -49,6 +68,8 @@ interface TaskModalProps {
     title: string;
     status: TaskStatus;
     frequency: TaskFrequency;
+    scheduledDate?: string;
+    monthlyDay?: number;
     tag?: string;
     estimatedMinutes?: number;
   }) => void;
@@ -57,6 +78,7 @@ interface TaskModalProps {
 export function TaskModal({
   open,
   editingTask,
+  defaultProduct = '99 Rides',
   channels,
   timeBank,
   onClose,
@@ -64,24 +86,49 @@ export function TaskModal({
 }: TaskModalProps) {
   const [product, setProduct] = useState<ProductType>('99 Rides');
   const [subBrand, setSubBrand] = useState('PAX');
-  const [channelType, setChannelType] = useState<ChannelType>('Externo');
+  const [channelType, setChannelType] = useState<ChannelType>('Nenhum');
   const [channelName, setChannelName] = useState('');
   const [title, setTitle] = useState('');
   const [status, setStatus] = useState<TaskStatus>('andamento');
   const [frequency, setFrequency] = useState<TaskFrequency>('Diária');
+  const [scheduledDate, setScheduledDate] = useState('');
+  const [monthlyDay, setMonthlyDay] = useState('30');
   const [tag, setTag] = useState('');
   const [estimatedMinutes, setEstimatedMinutes] = useState('');
+  const wasOpenRef = useRef(false);
+  const lastEditIdRef = useRef<string | null>(null);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      wasOpenRef.current = false;
+      lastEditIdRef.current = null;
+      return;
+    }
+
+    const currentEditId = editingTask?.id ?? null;
+    if (wasOpenRef.current && lastEditIdRef.current === currentEditId) {
+      return;
+    }
+    wasOpenRef.current = true;
+    lastEditIdRef.current = currentEditId;
+
     if (editingTask) {
       setProduct(editingTask.product);
-      setSubBrand(editingTask.subBrand || (editingTask.product === '99 Rides' ? 'PAX' : editingTask.product === '99 Food' ? 'B-Side' : 'Geral'));
+      setSubBrand(
+        editingTask.subBrand ||
+          (editingTask.product === '99 Rides'
+            ? 'PAX'
+            : editingTask.product === '99 Food'
+              ? 'B-Side'
+              : 'Geral'),
+      );
       setChannelType(editingTask.channelType || 'Nenhum');
       setChannelName(editingTask.channelName || '');
       setTitle(editingTask.title);
       setStatus(editingTask.status);
       setFrequency(editingTask.frequency);
+      setScheduledDate(editingTask.scheduledDate || '');
+      setMonthlyDay(editingTask.monthlyDay ? String(editingTask.monthlyDay) : '30');
       setTag(editingTask.tag || '');
       setEstimatedMinutes(
         typeof editingTask.estimatedMinutes === 'number' && editingTask.estimatedMinutes > 0
@@ -89,17 +136,26 @@ export function TaskModal({
           : '',
       );
     } else {
-      setProduct('99 Rides');
-      setSubBrand('PAX');
-      setChannelType('Externo');
-      setChannelName(channels.rides.externos[0]?.name || '');
+      const initialProduct = defaultProduct || '99 Rides';
+      setProduct(initialProduct);
+      setSubBrand(
+        initialProduct === '99 Rides'
+          ? 'PAX'
+          : initialProduct === '99 Food'
+            ? 'B-Side'
+            : 'Geral',
+      );
+      setChannelType('Nenhum');
+      setChannelName('');
       setTitle('');
-      setStatus('andamento');
+      setStatus('afazer');
       setFrequency('Diária');
+      setScheduledDate('');
+      setMonthlyDay('30');
       setTag('');
       setEstimatedMinutes('');
     }
-  }, [open, editingTask, channels]);
+  }, [open, editingTask, defaultProduct]);
 
   if (!open) return null;
 
@@ -144,7 +200,9 @@ export function TaskModal({
           : channelType === 'Externo'
             ? channels.rides.externos
             : channels.rides.internos;
-      setChannelName(nextList[0]?.name || '');
+      if (!nextList.some((c) => c.name === channelName)) {
+        setChannelName('');
+      }
     }
   }
 
@@ -162,13 +220,70 @@ export function TaskModal({
         : nextType === 'Externo'
           ? channels.rides.externos
           : channels.rides.internos;
-    setChannelName(nextList[0]?.name || '');
+    if (!nextList.some((c) => c.name === channelName)) {
+      setChannelName('');
+    }
+  }
+
+  function handleFrequencyChange(nextFreq: TaskFrequency) {
+    setFrequency(nextFreq);
+    const brt = getBrasiliaTimeParts();
+    const todayISO = getBrasiliaTodayISO();
+    if (nextFreq === 'Mensal') {
+      const parsedDay = Math.max(1, Math.min(31, Number.parseInt(monthlyDay || '30', 10) || 30));
+      setMonthlyDay(String(parsedDay));
+      setScheduledDate('');
+      if (!isMonthlyDayMatch(parsedDay, brt.year, brt.month, brt.day)) {
+        setStatus('rotina');
+      } else if (status === 'rotina') {
+        setStatus('afazer');
+      }
+    } else if (nextFreq === 'Diária') {
+      setScheduledDate('');
+      if (status === 'rotina') setStatus('afazer');
+    } else {
+      if (scheduledDate && scheduledDate > todayISO && status !== 'concluido') {
+        setStatus('rotina');
+      }
+    }
+  }
+
+  function handleMonthlyDayChange(raw: string) {
+    setMonthlyDay(raw);
+    const parsed = Number.parseInt(raw, 10);
+    if (Number.isFinite(parsed) && parsed >= 1 && parsed <= 31) {
+      const brt = getBrasiliaTimeParts();
+      if (!isMonthlyDayMatch(parsed, brt.year, brt.month, brt.day)) {
+        if (status !== 'concluido') setStatus('rotina');
+      } else if (status === 'rotina') {
+        setStatus('afazer');
+      }
+    }
+  }
+
+  function handleScheduledDateChange(nextDate: string) {
+    setScheduledDate(nextDate);
+    const todayISO = getBrasiliaTodayISO();
+    if (nextDate && nextDate > todayISO) {
+      if (status !== 'concluido') setStatus('rotina');
+    } else if (nextDate && nextDate <= todayISO && status === 'rotina') {
+      setStatus('afazer');
+    }
   }
 
   function handleSubmit() {
     const trimmed = title.trim();
     if (!trimmed) return;
     const parsedMinutes = Number.parseInt(estimatedMinutes, 10);
+    const parsedMonthlyDay =
+      frequency === 'Mensal'
+        ? Math.max(1, Math.min(31, Number.parseInt(monthlyDay || '30', 10) || 30))
+        : undefined;
+    const cleanScheduledDate =
+      frequency === 'Pontual' || frequency === 'Semanal'
+        ? scheduledDate.trim() || undefined
+        : undefined;
+
     onSave({
       id: editingTask?.id,
       product,
@@ -178,6 +293,8 @@ export function TaskModal({
       title: trimmed,
       status,
       frequency,
+      scheduledDate: cleanScheduledDate,
+      monthlyDay: parsedMonthlyDay,
       tag: tag.trim() || undefined,
       estimatedMinutes:
         Number.isFinite(parsedMinutes) && parsedMinutes > 0 ? parsedMinutes : undefined,
@@ -187,14 +304,10 @@ export function TaskModal({
   const availableTags = timeBank
     ? getAllAvailableTags(timeBank)
     : DEFAULT_TIME_TAGS;
-  const smartMatchPreview = timeBank
-    ? matchTimeRule(
-        `${title} ${channelName} ${product}`,
-        tag.trim() || undefined,
-        timeBank.timeRules || [],
-        'tasks',
-      )
-    : null;
+  const selectedTagRule =
+    timeBank && tag.trim()
+      ? matchTimeRule('', tag.trim(), timeBank.timeRules || [], 'tasks').rule
+      : null;
 
   return (
     <div
@@ -327,32 +440,92 @@ export function TaskModal({
               <label className="block text-[#A9B99D] mb-1 font-semibold">Frequência</label>
               <select
                 value={frequency}
-                onChange={(e) => setFrequency(e.target.value as TaskFrequency)}
+                onChange={(e) => handleFrequencyChange(e.target.value as TaskFrequency)}
                 className="w-full bg-[#0b100d] border border-[#777F89]/60 rounded-xl p-2.5 text-[#EDE9DE] focus:outline-none focus:border-[#C5A66B]"
               >
-                <option value="Diária">Diária</option>
+                <option value="Diária">Diária (Todos os dias)</option>
                 <option value="Semanal">Semanal</option>
-                <option value="Pontual">Pontual</option>
+                <option value="Mensal">Mensal (Todo dia X)</option>
+                <option value="Pontual">Pontual / Data específica</option>
               </select>
             </div>
           </div>
 
+          {frequency === 'Mensal' && (
+            <div className="p-3 rounded-xl bg-[#0b100d] border border-[#C5A66B]/35 space-y-1.5">
+              <div className="flex items-center justify-between gap-3">
+                <label className="text-[#EDE9DE] font-semibold">
+                  Repetir todo mês no dia:
+                </label>
+                <input
+                  type="number"
+                  min={1}
+                  max={31}
+                  value={monthlyDay}
+                  onChange={(e) => handleMonthlyDayChange(e.target.value)}
+                  className="w-20 bg-[#151d18] border border-[#777F89]/60 rounded-lg px-2.5 py-1.5 text-center font-mono font-bold text-[#C5A66B] focus:outline-none focus:border-[#C5A66B]"
+                />
+              </div>
+              <p className="text-[11px] text-[#A9B99D]">
+                Fica guardada em <strong className="text-[#EDE9DE]">Rotina</strong> no Quadro de Tarefas e volta automaticamente para fazer todo dia{' '}
+                <strong className="text-[#C5A66B]">{monthlyDay || '30'}</strong>.
+              </p>
+            </div>
+          )}
+
+          {(frequency === 'Pontual' || frequency === 'Semanal') && (
+            <div className="p-3 rounded-xl bg-[#0b100d] border border-[#777F89]/40 space-y-1.5">
+              <div className="flex items-center justify-between gap-2">
+                <label className="text-[#A9B99D] font-semibold">
+                  Data específica (opcional)
+                </label>
+                {scheduledDate && (
+                  <button
+                    type="button"
+                    onClick={() => handleScheduledDateChange('')}
+                    className="text-[11px] text-[#A9B99D] hover:text-[#C5A66B] cursor-pointer"
+                  >
+                    Limpar data
+                  </button>
+                )}
+              </div>
+              <input
+                type="date"
+                value={scheduledDate}
+                onChange={(e) => handleScheduledDateChange(e.target.value)}
+                className="w-full bg-[#151d18] border border-[#777F89]/60 rounded-lg p-2 text-[#EDE9DE] font-mono focus:outline-none focus:border-[#C5A66B]"
+              />
+              {scheduledDate && (
+                <p className="text-[11px] text-[#A9B99D]">
+                  Aparecerá nos Afazeres e Tarefas do Dia em{' '}
+                  <strong className="text-[#C5A66B]">{formatShortDateBR(scheduledDate)}</strong>.
+                </p>
+              )}
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className="block text-[#A9B99D] mb-1 font-semibold">
-                Etiqueta (Organização)
+                Etiqueta de Tempo
               </label>
               <select
                 value={tag}
                 onChange={(e) => setTag(e.target.value)}
                 className="w-full bg-[#0b100d] border border-[#777F89]/60 rounded-xl p-2.5 text-[#EDE9DE] focus:outline-none focus:border-[#C5A66B]"
               >
-                <option value="">Detectar pelo nome</option>
-                {availableTags.map((t) => (
-                  <option key={t} value={t}>
-                    #{t}
-                  </option>
-                ))}
+                <option value="">Sem etiqueta (padrão)</option>
+                {availableTags.map((t) => {
+                  const ruleForTag = timeBank
+                    ? matchTimeRule('', t, timeBank.timeRules || [], 'tasks').rule
+                    : null;
+                  return (
+                    <option key={t} value={t}>
+                      #{t}
+                      {ruleForTag ? ` (${ruleForTag.minutes}m)` : ''}
+                    </option>
+                  );
+                })}
               </select>
             </div>
             <div>
@@ -366,20 +539,14 @@ export function TaskModal({
                 value={estimatedMinutes}
                 onChange={(e) => setEstimatedMinutes(e.target.value)}
                 placeholder={
-                  smartMatchPreview?.rule
-                    ? `Auto: ${smartMatchPreview.rule.minutes}min`
+                  selectedTagRule
+                    ? `Etiqueta: ${selectedTagRule.minutes}min`
                     : `Padrão (${timeBank?.defaultTaskMinutes ?? 15}min)`
                 }
                 className="w-full bg-[#0b100d] border border-[#777F89]/60 rounded-xl p-2.5 text-[#EDE9DE] placeholder-[#777F89] focus:outline-none focus:border-[#C5A66B]"
               />
             </div>
           </div>
-
-          {!estimatedMinutes && smartMatchPreview?.rule && (
-            <div className="text-[11px] font-mono text-[#C5A66B] bg-[#C5A66B]/10 border border-[#C5A66B]/25 rounded-lg px-2.5 py-1.5">
-              Reconhecido automaticamente como <strong>#{smartMatchPreview.rule.tag}</strong> ({smartMatchPreview.rule.minutes}min)
-            </div>
-          )}
         </div>
 
         <div className="flex justify-end gap-2 pt-3 border-t border-[#777F89]/40">
@@ -413,12 +580,15 @@ interface ChannelModalProps {
     channel: KishiChannel;
   } | null;
   defaultType: 'Interno' | 'Externo';
+  workspaceState?: KishiState;
   onClose: () => void;
   onSave: (payload: {
     folder: FolderKey;
     name: string;
     url: string;
     type: 'Interno' | 'Externo';
+    monitorSheetUrl?: string;
+    watchChanges?: boolean;
     editing: { listKey: 'internos' | 'externos'; index: number } | null;
   }) => void;
 }
@@ -428,27 +598,100 @@ export function ChannelModal({
   folder,
   editing,
   defaultType,
+  workspaceState,
   onClose,
   onSave,
 }: ChannelModalProps) {
   const [name, setName] = useState('');
   const [url, setUrl] = useState('');
   const [type, setType] = useState<'Interno' | 'Externo'>('Externo');
+  const [watchChanges, setWatchChanges] = useState(false);
+  const [monitorSheetUrl, setMonitorSheetUrl] = useState('');
+  const [testingSheet, setTestingSheet] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  const wasOpenRef = useRef(false);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      wasOpenRef.current = false;
+      return;
+    }
+    if (wasOpenRef.current) return;
+    wasOpenRef.current = true;
     if (editing) {
       setName(editing.channel.name);
       setUrl(editing.channel.url);
       setType(editing.listKey === 'internos' ? 'Interno' : 'Externo');
+      setWatchChanges(Boolean(editing.channel.watchChanges));
+      setMonitorSheetUrl(editing.channel.monitorSheetUrl || '');
     } else {
       setName('');
       setUrl('');
       setType(defaultType);
+      setWatchChanges(false);
+      setMonitorSheetUrl('');
     }
+    setTestingSheet(false);
+    setTestResult(null);
   }, [open, editing, defaultType]);
 
+  const urlDuplicateMatches = useMemo(() => {
+    if (!open) return [];
+    return findDuplicateLinks(
+      url,
+      workspaceState,
+      editing
+        ? {
+            kind: 'channel',
+            channelRef: { folder, listKey: editing.listKey, index: editing.index },
+            channelField: 'url',
+          }
+        : undefined,
+    );
+  }, [open, url, workspaceState, editing, folder]);
+
+  const monitorUrlDuplicateMatches = useMemo(() => {
+    if (!open || !monitorSheetUrl.trim()) return [];
+    return findDuplicateLinks(
+      monitorSheetUrl,
+      workspaceState,
+      editing
+        ? {
+            kind: 'channel',
+            channelRef: { folder, listKey: editing.listKey, index: editing.index },
+            channelField: 'monitorSheetUrl',
+          }
+        : undefined,
+    );
+  }, [open, monitorSheetUrl, workspaceState, editing, folder]);
+
   if (!open) return null;
+
+  const effectiveMonitorUrl = monitorSheetUrl.trim() || url.trim();
+  const hasValidSheetTarget = isGoogleSheetsUrl(effectiveMonitorUrl);
+
+  async function handleTestMonitorSheet() {
+    if (!effectiveMonitorUrl) return;
+    setTestingSheet(true);
+    setTestResult(null);
+    const res = await syncGoogleSheetUrl(effectiveMonitorUrl);
+    setTestingSheet(false);
+    if (res.ok && res.csv) {
+      const lineCount = res.csv.replace(/\r\n/g, '\n').trim().split('\n').length;
+      setTestResult({
+        ok: true,
+        message: `Leitura funcionando (${lineCount} linha(s) lida(s)). O KISHI avisará se alguém alterar esta planilha!`,
+      });
+    } else {
+      setTestResult({
+        ok: false,
+        message:
+          res.error ||
+          'Não foi possível ler esta planilha automaticamente. Verifique se é um link do Google Sheets acessível.',
+      });
+    }
+  }
 
   function handleSubmit() {
     if (!name.trim() || !url.trim()) return;
@@ -457,6 +700,8 @@ export function ChannelModal({
       name: name.trim(),
       url: url.trim(),
       type,
+      monitorSheetUrl: monitorSheetUrl.trim() || undefined,
+      watchChanges,
       editing: editing ? { listKey: editing.listKey, index: editing.index } : null,
     });
   }
@@ -467,7 +712,7 @@ export function ChannelModal({
       onClick={onClose}
     >
       <div
-        className="bg-[#151d18] border border-[#777F89]/60 rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl"
+        className="bg-[#151d18] border border-[#777F89]/60 rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex justify-between items-center border-b border-[#777F89]/40 pb-3">
@@ -501,7 +746,7 @@ export function ChannelModal({
 
           <div>
             <label className="block text-[#A9B99D] mb-1 font-semibold">
-              Link Direto da Planilha / Base (URL)
+              Link Principal do Canal (URL)
             </label>
             <input
               type="url"
@@ -513,6 +758,7 @@ export function ChannelModal({
               placeholder="https://docs.google.com/spreadsheets/d/..."
               className="w-full bg-[#0b100d] border border-[#777F89]/60 rounded-xl p-2.5 text-[#EDE9DE] placeholder-[#777F89] focus:outline-none focus:border-[#C5A66B]"
             />
+            <DuplicateLinkNotice matches={urlDuplicateMatches} />
           </div>
 
           <div>
@@ -525,6 +771,95 @@ export function ChannelModal({
               <option value="Externo">Externo (Bases CPB)</option>
               <option value="Interno">Interno / Proprietário</option>
             </select>
+          </div>
+
+          {/* Monitoramento silencioso visível apenas aqui dentro da edição */}
+          <div className="p-3 rounded-xl bg-[#0b100d] border border-[#777F89]/40 space-y-2.5">
+            <label className="flex items-start gap-2.5 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={watchChanges}
+                onChange={(e) => {
+                  setWatchChanges(e.target.checked);
+                  setTestResult(null);
+                }}
+                className="h-3.5 w-3.5 mt-0.5 rounded bg-[#151d18] accent-[#C5A66B] cursor-pointer shrink-0"
+              />
+              <div className="space-y-0.5">
+                <span className="font-bold text-[#EDE9DE] flex items-center gap-1.5">
+                  <EyeOff className="w-3.5 h-3.5 text-[#C5A66B]" />
+                  <span>Monitorar plano internamente</span>
+                </span>
+                <span className="text-[11px] text-[#A9B99D] block leading-snug">
+                  Sem mostrar informações extras no card. Se alguém mexer na planilha, você recebe alerta no sininho e entra automaticamente em <strong>Tarefas do Dia</strong>.
+                </span>
+              </div>
+            </label>
+
+            {watchChanges && (
+              <div className="pt-2 border-t border-[#777F89]/30 space-y-2">
+                <div>
+                  <label className="block text-[#A9B99D] mb-1 text-[11px] font-semibold">
+                    Planilha Google Sheets monitorada (visível só aqui)
+                  </label>
+                  <div className="flex gap-1.5">
+                    <input
+                      type="url"
+                      value={monitorSheetUrl}
+                      onChange={(e) => {
+                        setMonitorSheetUrl(e.target.value);
+                        setTestResult(null);
+                      }}
+                      placeholder={
+                        isGoogleSheetsUrl(url)
+                          ? 'Deixe em branco para usar o link acima'
+                          : 'Cole aqui o link da planilha Google Sheets...'
+                      }
+                      className="flex-1 bg-[#151d18] border border-[#777F89]/60 rounded-lg px-2.5 py-1.5 text-[11px] text-[#EDE9DE] placeholder-[#777F89] focus:outline-none focus:border-[#C5A66B]"
+                    />
+                    <button
+                      type="button"
+                      disabled={!hasValidSheetTarget || testingSheet}
+                      onClick={() => void handleTestMonitorSheet()}
+                      className="btn-press px-2.5 py-1.5 rounded-lg bg-[#151d18] hover:bg-[#1b251f] disabled:opacity-50 border border-[#777F89]/50 text-[11px] font-semibold text-[#C5A66B] flex items-center gap-1 shrink-0 cursor-pointer"
+                    >
+                      <RefreshCw className={`w-3 h-3 ${testingSheet ? 'animate-spin' : ''}`} />
+                      <span>{testingSheet ? 'Testando...' : 'Testar'}</span>
+                    </button>
+                  </div>
+                  <DuplicateLinkNotice matches={monitorUrlDuplicateMatches} />
+                </div>
+
+                {!hasValidSheetTarget && (
+                  <p className="text-[11px] text-amber-300 leading-snug">
+                    Informe um link do Google Sheets (acima ou neste campo) com a aba (#gid=) que deseja acompanhar.
+                  </p>
+                )}
+
+                {editing?.channel.lastSyncedAt && (
+                  <p className="text-[10px] font-mono text-[#A9B99D]">
+                    Última verificação: {editing.channel.lastSyncedAt}
+                  </p>
+                )}
+
+                {testResult && (
+                  <div
+                    className={`p-2 rounded-lg border text-[11px] flex items-start gap-1.5 ${
+                      testResult.ok
+                        ? 'bg-emerald-950/40 border-emerald-500/40 text-emerald-200'
+                        : 'bg-rose-950/40 border-rose-500/40 text-rose-200'
+                    }`}
+                  >
+                    {testResult.ok ? (
+                      <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0 mt-0.5" />
+                    ) : (
+                      <AlertTriangle className="w-3.5 h-3.5 text-rose-400 shrink-0 mt-0.5" />
+                    )}
+                    <span>{testResult.message}</span>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
@@ -554,37 +889,69 @@ interface SheetLinkModalProps {
   open: boolean;
   editingSheet?: KishiSheet | null;
   defaultCategory?: string;
+  sheetColorLabels?: Record<string, string>;
+  workspaceState?: KishiState;
   onClose: () => void;
-  onSave: (payload: { id?: string; name: string; url: string; category: string }) => void;
+  onSave: (payload: {
+    id?: string;
+    name: string;
+    url: string;
+    category: string;
+    color?: string;
+    obs?: string;
+  }) => void;
 }
 
 export function SheetLinkModal({
   open,
   editingSheet,
   defaultCategory = '99',
+  sheetColorLabels,
+  workspaceState,
   onClose,
   onSave,
 }: SheetLinkModalProps) {
   const [name, setName] = useState('');
   const [url, setUrl] = useState('');
   const [category, setCategory] = useState(defaultCategory);
+  const [color, setColor] = useState('');
+  const [obs, setObs] = useState('');
+
+  const wasOpenRef = useRef(false);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      wasOpenRef.current = false;
+      return;
+    }
+    if (wasOpenRef.current) return;
+    wasOpenRef.current = true;
     if (editingSheet) {
       setName(editingSheet.name);
       setUrl(editingSheet.url);
       setCategory(editingSheet.category || defaultCategory);
+      setColor(editingSheet.color || '');
+      setObs(editingSheet.obs || '');
     } else {
       setName('');
       setUrl('');
       setCategory(defaultCategory);
+      setColor('');
+      setObs('');
     }
   }, [open, editingSheet, defaultCategory]);
 
-  if (!open) return null;
-
   const isLocalFile = editingSheet?.type === 'file';
+
+  const duplicateMatches = useMemo(() => {
+    if (!open || isLocalFile) return [];
+    return findDuplicateLinks(url, workspaceState, {
+      kind: 'sheet',
+      id: editingSheet?.id,
+    });
+  }, [open, isLocalFile, url, workspaceState, editingSheet?.id]);
+
+  if (!open) return null;
 
   function handleSubmit() {
     if (!name.trim() || (!isLocalFile && !url.trim())) return;
@@ -593,6 +960,8 @@ export function SheetLinkModal({
       name: name.trim(),
       url: isLocalFile ? editingSheet.url : url.trim(),
       category,
+      color: color || undefined,
+      obs: obs.trim() || undefined,
     });
   }
 
@@ -602,7 +971,7 @@ export function SheetLinkModal({
       onClick={onClose}
     >
       <div
-        className="bg-[#151d18] border border-[#777F89]/60 rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl"
+        className="bg-[#151d18] border border-[#777F89]/60 rounded-2xl w-full max-w-md p-6 space-y-4 shadow-2xl max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex justify-between items-center border-b border-[#777F89]/40 pb-3">
@@ -649,6 +1018,7 @@ export function SheetLinkModal({
                 placeholder="https://docs.google.com/spreadsheets/..."
                 className="w-full bg-[#0b100d] border border-[#777F89]/60 rounded-xl p-2.5 text-[#EDE9DE] placeholder-[#777F89] focus:outline-none focus:border-[#C5A66B]"
               />
+              <DuplicateLinkNotice matches={duplicateMatches} />
             </div>
           )}
 
@@ -664,6 +1034,60 @@ export function SheetLinkModal({
               <option value="99 Food">99 Food</option>
               <option value="Canais Externos">Canais Externos</option>
             </select>
+          </div>
+
+          <div>
+            <label className="block text-[#A9B99D] mb-1.5 font-semibold">
+              Cor de Organização (Opcional)
+            </label>
+            <div className="flex flex-wrap gap-1.5">
+              <button
+                type="button"
+                onClick={() => setColor('')}
+                className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold cursor-pointer transition ${
+                  color === ''
+                    ? 'bg-[#C5A66B]/20 border-[#C5A66B] text-[#EDE9DE]'
+                    : 'bg-[#0b100d] border-[#777F89]/40 text-[#A9B99D] hover:text-white'
+                }`}
+              >
+                Sem cor
+              </button>
+              {SHEET_COLOR_PALETTE.map((c) => {
+                const isSelected = color === c.id;
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => setColor(c.id)}
+                    className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold flex items-center gap-1.5 cursor-pointer transition ${
+                      isSelected
+                        ? c.pillActiveClass
+                        : 'bg-[#0b100d] border-[#777F89]/40 text-[#A9B99D] hover:text-white'
+                    }`}
+                  >
+                    <span className={`h-2.5 w-2.5 rounded-full shrink-0 ${c.dotClass}`} />
+                    <span>{getSheetColorLabel(c.id, sheetColorLabels)}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-[#A9B99D] mb-1 font-semibold">
+              Pequena Observação (aparece no card)
+            </label>
+            <input
+              type="text"
+              maxLength={140}
+              value={obs}
+              onChange={(e) => setObs(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') handleSubmit();
+              }}
+              placeholder="Ex: CP atualiza / Verificar aba semanal"
+              className="w-full bg-[#0b100d] border border-[#777F89]/60 rounded-xl p-2.5 text-[#EDE9DE] placeholder-[#777F89] focus:outline-none focus:border-[#C5A66B]"
+            />
           </div>
         </div>
 
@@ -693,6 +1117,7 @@ interface PortalModalProps {
   open: boolean;
   editingPortal?: KishiPortal | null;
   defaultCategory?: string;
+  workspaceState?: KishiState;
   onClose: () => void;
   onSave: (payload: {
     id?: string;
@@ -707,6 +1132,7 @@ export function PortalModal({
   open,
   editingPortal,
   defaultCategory = '99',
+  workspaceState,
   onClose,
   onSave,
 }: PortalModalProps) {
@@ -715,8 +1141,15 @@ export function PortalModal({
   const [category, setCategory] = useState(defaultCategory);
   const [kind, setKind] = useState<'Portal' | 'App'>('Portal');
 
+  const wasOpenRef = useRef(false);
+
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      wasOpenRef.current = false;
+      return;
+    }
+    if (wasOpenRef.current) return;
+    wasOpenRef.current = true;
     if (editingPortal) {
       setName(editingPortal.name);
       setUrl(editingPortal.url);
@@ -729,6 +1162,14 @@ export function PortalModal({
       setKind('Portal');
     }
   }, [open, editingPortal, defaultCategory]);
+
+  const duplicateMatches = useMemo(() => {
+    if (!open) return [];
+    return findDuplicateLinks(url, workspaceState, {
+      kind: 'portal',
+      id: editingPortal?.id,
+    });
+  }, [open, url, workspaceState, editingPortal?.id]);
 
   if (!open) return null;
 
@@ -791,6 +1232,7 @@ export function PortalModal({
               placeholder="https://..."
               className="w-full bg-[#0b100d] border border-[#777F89]/60 rounded-xl p-2.5 text-[#EDE9DE] placeholder-[#777F89] focus:outline-none focus:border-[#C5A66B]"
             />
+            <DuplicateLinkNotice matches={duplicateMatches} />
           </div>
 
           <div className="grid grid-cols-2 gap-3">
@@ -856,8 +1298,15 @@ export function ProfileModal({ open, user, onClose, onSave }: ProfileModalProps)
   const [initial, setInitial] = useState(user.initial);
   const [role, setRole] = useState(user.role);
 
+  const wasOpenRef = useRef(false);
+
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      wasOpenRef.current = false;
+      return;
+    }
+    if (wasOpenRef.current) return;
+    wasOpenRef.current = true;
     setName(user.name);
     setInitial(user.initial);
     setRole(user.role);
@@ -967,8 +1416,15 @@ export function HoursSettingsModal({
     String((timeBank.extraBankMinutes || 0) % 60),
   );
 
+  const wasOpenRef = useRef(false);
+
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      wasOpenRef.current = false;
+      return;
+    }
+    if (wasOpenRef.current) return;
+    wasOpenRef.current = true;
     setWorkStart(timeBank.workStart || '09:00');
     setWorkEnd(timeBank.workEnd || '18:00');
     setBreakMinutes(String(timeBank.breakMinutes ?? 60));
@@ -1203,7 +1659,6 @@ export function TempoSettingsModal({
   const [newLabel, setNewLabel] = useState('');
   const [newTag, setNewTag] = useState('Extração');
   const [customTagInput, setCustomTagInput] = useState('');
-  const [newKeywords, setNewKeywords] = useState('');
   const [newMinutes, setNewMinutes] = useState('20');
 
   const workStats = useMemo(() => computeWorkHoursStats(timeBank), [timeBank]);
@@ -1231,22 +1686,15 @@ export function TempoSettingsModal({
     if (!labelTrimmed) return;
     const effectiveTag =
       newTag === '__custom__'
-        ? customTagInput.trim() || 'Geral'
+        ? customTagInput.trim() || labelTrimmed
         : newTag || 'Geral';
     const parsedMins = Math.max(0, Number.parseInt(newMinutes || '15', 10) || 15);
-    const parsedKeywords = newKeywords
-      .split(',')
-      .map((k) => k.trim())
-      .filter(Boolean);
 
     const nextRule: KishiTimeRule = {
       id: `rule_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
       label: labelTrimmed,
       tag: effectiveTag,
-      keywords:
-        parsedKeywords.length > 0
-          ? parsedKeywords
-          : labelTrimmed.toLowerCase().split(/\s+/).filter((w) => w.length >= 3),
+      keywords: [],
       minutes: parsedMins,
       appliesTo: 'all',
     };
@@ -1257,7 +1705,6 @@ export function TempoSettingsModal({
     });
     setNewLabel('');
     setCustomTagInput('');
-    setNewKeywords('');
     setNewMinutes('20');
   }
 
@@ -1383,14 +1830,14 @@ export function TempoSettingsModal({
               <div className="p-3.5 rounded-xl bg-[#0b100d] border border-[#C5A66B]/30 space-y-2.5">
                 <div className="flex items-center gap-1.5 font-bold text-[#EDE9DE]">
                   <Plus className="w-3.5 h-3.5 text-[#C5A66B]" />
-                  <span>Adicionar Tarefa / Regra de Tempo</span>
+                  <span>Adicionar Etiqueta de Tempo</span>
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-12 gap-2">
                   <input
                     type="text"
                     value={newLabel}
                     onChange={(e) => setNewLabel(e.target.value)}
-                    placeholder="Nome da tarefa (ex: Extrair base Logan)"
+                    placeholder="Nome da atividade (ex: Extrair base Logan)"
                     className="sm:col-span-5 bg-[#151d18] border border-[#777F89]/60 rounded-xl px-3 py-2 text-[#EDE9DE] placeholder-[#777F89] focus:outline-none focus:border-[#C5A66B]"
                   />
                   <select
@@ -1435,14 +1882,6 @@ export function TempoSettingsModal({
                     className="w-full bg-[#151d18] border border-[#777F89]/60 rounded-xl px-3 py-2 text-[#EDE9DE] placeholder-[#777F89] focus:outline-none focus:border-[#C5A66B]"
                   />
                 )}
-
-                <input
-                  type="text"
-                  value={newKeywords}
-                  onChange={(e) => setNewKeywords(e.target.value)}
-                  placeholder="Palavras-chave para bater com nomes (opcional, ex: extrair, wave, plano)"
-                  className="w-full bg-[#151d18] border border-[#777F89]/40 rounded-xl px-3 py-1.5 text-[11px] text-[#EDE9DE] placeholder-[#777F89] focus:outline-none focus:border-[#C5A66B]"
-                />
               </div>
 
               {/* Filtro por etiqueta */}
@@ -1537,34 +1976,16 @@ export function TempoSettingsModal({
                           </button>
                         </div>
                       </div>
-
-                      <div className="flex flex-col sm:flex-row sm:items-center gap-2 text-[11px]">
-                        <span className="text-[#A9B99D] shrink-0">Palavras-chave:</span>
-                        <input
-                          type="text"
-                          value={(rule.keywords || []).join(', ')}
-                          onChange={(e) =>
-                            handleUpdateRule(rule.id, {
-                              keywords: e.target.value
-                                .split(',')
-                                .map((k) => k.trim())
-                                .filter(Boolean),
-                            })
-                          }
-                          placeholder="extrair, plano, wave..."
-                          className="flex-1 bg-[#151d18] border border-[#777F89]/35 rounded-lg px-2.5 py-1 font-mono text-[11px] text-[#EDE9DE] placeholder-[#777F89] focus:outline-none focus:border-[#C5A66B]"
-                        />
-                      </div>
                     </div>
                   ))}
                 </div>
               )}
 
-              {/* Padrões quando não houver match */}
+              {/* Padrões quando não houver etiqueta selecionada */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-[#777F89]/30">
                 <div>
                   <label className="block text-[11px] text-[#A9B99D] mb-1">
-                    Padrão se tarefa não bater com nenhuma regra (min)
+                    Padrão se tarefa estiver sem etiqueta (min)
                   </label>
                   <input
                     type="number"
@@ -1585,7 +2006,7 @@ export function TempoSettingsModal({
                 </div>
                 <div>
                   <label className="block text-[11px] text-[#A9B99D] mb-1">
-                    Padrão se extração não bater com regra (min, 0 = só por regra)
+                    Padrão se extração estiver sem etiqueta (min, 0 = usa #Extração)
                   </label>
                   <input
                     type="number"
@@ -1641,13 +2062,7 @@ export function TempoSettingsModal({
                             )}
                             {matchType === 'tag' && matchedRule && (
                               <span className="text-emerald-300 inline-flex items-center gap-1">
-                                · Etiqueta #{matchedRule.tag} ({matchedRule.minutes}m)
-                              </span>
-                            )}
-                            {matchType === 'smart' && matchedRule && (
-                              <span className="text-sky-300 inline-flex items-center gap-1">
-                                <Sparkles className="w-2.5 h-2.5" />
-                                Casou c/ &quot;{matchedRule.label}&quot; (#{matchedRule.tag})
+                                · #{matchedRule.tag} ({matchedRule.minutes}m)
                               </span>
                             )}
                             {matchType === 'default' && (
@@ -1666,7 +2081,7 @@ export function TempoSettingsModal({
                             }
                             className="bg-[#151d18] border border-[#777F89]/50 rounded-lg px-2 py-1 text-[11px] text-[#EDE9DE] focus:outline-none focus:border-[#C5A66B]"
                           >
-                            <option value="">Auto</option>
+                            <option value="">Sem etiqueta</option>
                             {allTags.map((t) => (
                               <option key={t} value={t}>
                                 #{t}
@@ -1753,7 +2168,7 @@ export function TempoSettingsModal({
                               </span>
                               {matchedRule && (
                                 <span className="text-sky-300">
-                                  · Casou c/ #{matchedRule.tag} ({matchedRule.minutes}m)
+                                  · #{matchedRule.tag} ({matchedRule.minutes}m)
                                 </span>
                               )}
                               {matchType === 'manual' && (
@@ -1772,7 +2187,7 @@ export function TempoSettingsModal({
                               }
                               className="bg-[#151d18] border border-[#777F89]/50 rounded-lg px-2 py-1 text-[11px] text-[#EDE9DE] focus:outline-none focus:border-[#C5A66B]"
                             >
-                              <option value="">Extração (Auto)</option>
+                              <option value="">Usar #Extração / padrão</option>
                               {allTags.map((t) => (
                                 <option key={t} value={t}>
                                   #{t}
@@ -1999,8 +2414,15 @@ export function CampaignModal({
   const [sheetUrl, setSheetUrl] = useState('');
   const [done, setDone] = useState(false);
 
+  const wasOpenRef = useRef(false);
+
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      wasOpenRef.current = false;
+      return;
+    }
+    if (wasOpenRef.current) return;
+    wasOpenRef.current = true;
     if (editingCampaign) {
       setName(editingCampaign.name);
       setDetails(editingCampaign.details);

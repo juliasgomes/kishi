@@ -7,7 +7,7 @@ export type RouteId =
   | 'chatbot';
 
 export type TaskStatus = 'afazer' | 'andamento' | 'rotina' | 'concluido';
-export type TaskFrequency = 'Diária' | 'Semanal' | 'Pontual';
+export type TaskFrequency = 'Diária' | 'Semanal' | 'Mensal' | 'Pontual';
 export type ProductType = '99 Rides' | '99 Food' | 'Geral';
 export type ChannelType = 'Externo' | 'Interno' | 'Nenhum';
 export type FolderKey = 'rides' | 'food';
@@ -33,6 +33,7 @@ export interface KishiTimeBank {
   defaultTodoMinutes: number;
   timeRules: KishiTimeRule[];
   availableMinutes?: number;
+  sheetColorLabels?: Record<string, string>;
 }
 
 export interface KishiUser {
@@ -48,6 +49,8 @@ export interface KishiSheet {
   type: 'link' | 'file';
   url: string;
   note: string;
+  color?: string;
+  obs?: string;
 }
 
 export interface KishiPortal {
@@ -67,6 +70,10 @@ export interface KishiChannel {
   name: string;
   url: string;
   type: 'Externo' | 'Interno';
+  monitorSheetUrl?: string;
+  watchChanges?: boolean;
+  lastCsvHash?: string;
+  lastSyncedAt?: string;
 }
 
 export interface KishiMediaRevision {
@@ -139,6 +146,8 @@ export interface KishiTask {
   title: string;
   status: TaskStatus;
   frequency: TaskFrequency;
+  scheduledDate?: string;
+  monthlyDay?: number;
   tag?: string;
   estimatedMinutes?: number;
   completedAt: string | null;

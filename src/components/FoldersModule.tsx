@@ -1,8 +1,10 @@
-import type { ChangeEvent } from 'react';
+import { useState, type ChangeEvent } from 'react';
 import {
   AppWindow,
   ArrowRight,
+  Calendar,
   Car,
+  Check,
   ExternalLink,
   FileSpreadsheet,
   Globe,
@@ -10,6 +12,7 @@ import {
   Link as LinkIcon,
   ListChecks,
   Lock,
+  Palette,
   Pencil,
   Plus,
   Share2,
@@ -25,20 +28,40 @@ import type {
   KishiPortal,
   KishiSheet,
   KishiState,
+  KishiTask,
   ProductType,
 } from '@/src/types/kishi';
 import { getChannelColor, getFrontStyle } from '@/src/utils/channelColors';
+import {
+  getSheetColorLabel,
+  getSheetColorMeta,
+  SHEET_COLOR_PALETTE,
+} from '@/src/utils/sheetColors';
+import {
+  formatShortDateBR,
+  getBrasiliaTodayISO,
+  getTaskScheduleLabel,
+  isTaskDueToday,
+  isTaskScheduledForDate,
+} from '@/src/utils/taskSchedule';
+import { getBrasiliaTimeParts } from '@/src/utils/workHours';
 
 interface FoldersModuleProps {
   activeTab: FolderTab;
   channels: KishiState['channels'];
   portals: KishiPortal[];
   sheets: KishiSheet[];
+  tasks: KishiTask[];
+  sheetColorLabels?: Record<string, string>;
   onSwitchTab: (tab: FolderTab) => void;
+  onUpdateSheetColorLabels: (nextLabels: Record<string, string>) => void;
   onToggleCommonTask: (folder: FolderKey, index: number) => void;
   onDeleteCommonTask: (folder: FolderKey, index: number) => void;
-  onAddCommonTask: (folder: FolderKey) => void;
   onPushCommonToToday: (title: string, product: ProductType) => void;
+  onOpenNewFrontTask: (product: ProductType) => void;
+  onOpenEditTask: (task: KishiTask) => void;
+  onToggleTaskDone: (taskId: string) => void;
+  onDeleteLinkedTask: (taskId: string) => void;
   onOpenNewChannel: (folder: FolderKey, defaultType: 'Interno' | 'Externo') => void;
   onOpenEditChannel: (
     folder: FolderKey,
@@ -85,11 +108,17 @@ export function FoldersModule({
   channels,
   portals,
   sheets,
+  tasks,
+  sheetColorLabels,
   onSwitchTab,
+  onUpdateSheetColorLabels,
   onToggleCommonTask,
   onDeleteCommonTask,
-  onAddCommonTask,
   onPushCommonToToday,
+  onOpenNewFrontTask,
+  onOpenEditTask,
+  onToggleTaskDone,
+  onDeleteLinkedTask,
   onOpenNewChannel,
   onOpenEditChannel,
   onDeleteChannel,
@@ -101,6 +130,12 @@ export function FoldersModule({
   onOpenEditSheet,
   onRemoveSheet,
 }: FoldersModuleProps) {
+  const [sheetColorFilter, setSheetColorFilter] = useState<string>('all');
+  const [editingColorsOpen, setEditingColorsOpen] = useState(false);
+  const [draftColorLabels, setDraftColorLabels] = useState<Record<string, string>>({});
+  const [todoFilterMode, setTodoFilterMode] = useState<'today' | 'date' | 'all'>('today');
+  const [selectedTodoDate, setSelectedTodoDate] = useState<string>(() => getBrasiliaTodayISO());
+
   const sharedPortals = portals.filter(
     (p) => p.category !== '99 Rides' && p.category !== '99 Food',
   );
@@ -109,6 +144,25 @@ export function FoldersModule({
   );
   const ridesSheets = sheets.filter((s) => s.category === '99 Rides');
   const foodSheets = sheets.filter((s) => s.category === '99 Food');
+
+  function openColorLabelsEditor() {
+    if (editingColorsOpen) {
+      setEditingColorsOpen(false);
+      return;
+    }
+    setDraftColorLabels(sheetColorLabels ? { ...sheetColorLabels } : {});
+    setEditingColorsOpen(true);
+  }
+
+  function saveColorLabelsEditor() {
+    const cleaned: Record<string, string> = {};
+    for (const c of SHEET_COLOR_PALETTE) {
+      const val = (draftColorLabels[c.id] || '').trim();
+      if (val) cleaned[c.id] = val;
+    }
+    onUpdateSheetColorLabels(cleaned);
+    setEditingColorsOpen(false);
+  }
 
   function handleFileInput(e: ChangeEvent<HTMLInputElement>, category: string) {
     const fileList = e.target.files;
@@ -137,22 +191,19 @@ export function FoldersModule({
               href={portal.url}
               target="_blank"
               rel="noopener noreferrer"
-              className={`interactive-card group p-3.5 rounded-xl bg-[#0f1512]/80 border border-[#777F89]/40 ${front.cardBorderClass} flex items-center justify-between gap-3 focus:outline-none`}
+              className={`interactive-card group p-3.5 rounded-xl bg-[#0f1512]/80 border border-[#777F89]/40 ${front.cardBorderClass} flex items-start justify-between gap-3 focus:outline-none`}
             >
-              <div className="flex items-center gap-3 min-w-0">
+              <div className="flex items-start gap-3 min-w-0 flex-1">
                 <div
-                  className={`h-9 ${isBoth99 ? 'px-2' : 'w-9'} rounded-lg flex items-center justify-center shrink-0 ${front.iconBgClass}`}
+                  className={`h-9 ${isBoth99 ? 'px-2' : 'w-9'} rounded-lg flex items-center justify-center shrink-0 mt-0.5 ${front.iconBgClass}`}
                 >
                   {renderFrontIcon(portal.category, portal.kind === 'App' ? 'app' : 'portal')}
                 </div>
-                <div className="min-w-0">
-                  <h4
-                    className="text-sm font-bold text-[#EDE9DE] group-hover:text-[#C5A66B] transition-colors truncate leading-snug"
-                    title={portal.name}
-                  >
+                <div className="min-w-0 flex-1">
+                  <h4 className="text-sm font-bold text-[#EDE9DE] group-hover:text-[#C5A66B] transition-colors break-words leading-snug">
                     {portal.name}
                   </h4>
-                  <p className="text-[11px] text-[#A9B99D] truncate mt-0.5">
+                  <p className="text-[11px] text-[#A9B99D] mt-0.5">
                     {portal.kind} · {isBoth99 ? '99' : front.label}
                   </p>
                 </div>
@@ -191,76 +242,213 @@ export function FoldersModule({
     );
   }
 
-  function renderSheetsGrid(items: KishiSheet[], emptyText: string) {
-    if (items.length === 0) {
-      return (
-        <div className="text-center py-6 text-[#A9B99D] text-xs border border-dashed border-[#777F89]/40 rounded-xl">
-          {emptyText}
-        </div>
-      );
-    }
+  function renderSheetsOrganizerAndGrid(items: KishiSheet[], emptyText: string) {
+    const filteredItems =
+      sheetColorFilter === 'all'
+        ? items
+        : sheetColorFilter === 'none'
+          ? items.filter((s) => !s.color)
+          : items.filter((s) => s.color === sheetColorFilter);
+
+    const hasUncolored = items.some((s) => !s.color);
 
     return (
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-        {items.map((sh) => {
-          const front = getFrontStyle(sh.category);
-          const isBoth99 = sh.category === '99';
-          return (
-            <a
-              key={sh.id}
-              href={sh.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className={`interactive-card group p-3.5 rounded-xl bg-[#0f1512]/80 border border-[#777F89]/40 ${front.cardBorderClass} flex items-center justify-between gap-3 focus:outline-none`}
+      <div className="space-y-3">
+        {/* Barra de Filtros por Cor + Customizar Títulos */}
+        <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setSheetColorFilter('all')}
+              className={`px-2.5 py-1 rounded-lg border text-[11px] font-semibold cursor-pointer transition ${
+                sheetColorFilter === 'all'
+                  ? 'bg-[#C5A66B]/20 border-[#C5A66B] text-[#EDE9DE]'
+                  : 'bg-[#0b100d] border-[#777F89]/40 text-[#A9B99D] hover:text-white'
+              }`}
             >
-              <div className="flex items-center gap-3 min-w-0">
-                <div
-                  className={`h-9 ${isBoth99 ? 'px-2' : 'w-9'} rounded-lg flex items-center justify-center shrink-0 ${front.iconBgClass}`}
-                >
-                  {renderFrontIcon(sh.category, sh.type === 'file' ? 'file' : 'sheet')}
-                </div>
-                <div className="min-w-0">
-                  <h4
-                    className="text-sm font-bold text-[#EDE9DE] group-hover:text-[#C5A66B] transition-colors leading-snug truncate"
-                    title={sh.name}
-                  >
-                    {sh.name}
-                  </h4>
-                  <p className="text-[11px] text-[#A9B99D] truncate mt-0.5">
-                    {sh.type === 'file' ? 'Arquivo' : 'Planilha'} · {isBoth99 ? '99' : front.label}
-                  </p>
-                </div>
-              </div>
+              Todas ({items.length})
+            </button>
 
-              <div
-                className="flex items-center gap-1 shrink-0"
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                }}
+            {SHEET_COLOR_PALETTE.map((c) => {
+              const count = items.filter((s) => s.color === c.id).length;
+              const isActive = sheetColorFilter === c.id;
+              return (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => setSheetColorFilter(isActive ? 'all' : c.id)}
+                  className={`px-2.5 py-1 rounded-lg border text-[11px] font-semibold flex items-center gap-1.5 cursor-pointer transition ${
+                    isActive
+                      ? c.pillActiveClass
+                      : 'bg-[#0b100d] border-[#777F89]/40 text-[#A9B99D] hover:text-white'
+                  }`}
+                >
+                  <span className={`h-2 w-2 rounded-full shrink-0 ${c.dotClass}`} />
+                  <span>{getSheetColorLabel(c.id, sheetColorLabels)}</span>
+                  {count > 0 && <span className="font-mono opacity-80">({count})</span>}
+                </button>
+              );
+            })}
+
+            {hasUncolored && items.some((s) => Boolean(s.color)) && (
+              <button
+                type="button"
+                onClick={() =>
+                  setSheetColorFilter(sheetColorFilter === 'none' ? 'all' : 'none')
+                }
+                className={`px-2.5 py-1 rounded-lg border text-[11px] font-semibold cursor-pointer transition ${
+                  sheetColorFilter === 'none'
+                    ? 'bg-[#777F89]/25 border-[#777F89] text-[#EDE9DE]'
+                    : 'bg-[#0b100d] border-[#777F89]/40 text-[#A9B99D] hover:text-white'
+                }`}
               >
-                <button
-                  type="button"
-                  onClick={() => onOpenEditSheet(sh)}
-                  className="btn-press h-7 w-7 rounded-lg bg-[#0b100d] hover:bg-[#1b251f] text-[#A9B99D] hover:text-[#EDE9DE] flex items-center justify-center cursor-pointer"
-                  title="Editar Planilha / Frente"
-                  aria-label={`Editar ${sh.name}`}
+                Sem cor ({items.filter((s) => !s.color).length})
+              </button>
+            )}
+          </div>
+
+          <button
+            type="button"
+            onClick={openColorLabelsEditor}
+            className={`btn-press px-2.5 py-1 rounded-lg border text-[11px] font-semibold flex items-center gap-1.5 cursor-pointer shrink-0 ${
+              editingColorsOpen
+                ? 'bg-[#C5A66B]/20 border-[#C5A66B] text-[#C5A66B]'
+                : 'bg-[#0b100d] border-[#777F89]/40 text-[#A9B99D] hover:text-[#EDE9DE]'
+            }`}
+          >
+            <Palette className="w-3 h-3" />
+            <span>{editingColorsOpen ? 'Fechar Cores' : 'Títulos das Cores'}</span>
+          </button>
+        </div>
+
+        {/* Editor Inline de Títulos das Cores */}
+        {editingColorsOpen && (
+          <div className="p-3.5 rounded-xl bg-[#0b100d] border border-[#C5A66B]/40 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <p className="text-[11px] text-[#A9B99D]">
+                Personalize o nome de cada cor para identificar suas planilhas (ex: Vermelho ={' '}
+                <strong className="text-[#EDE9DE]">CP atualiza</strong>).
+              </p>
+              <button
+                type="button"
+                onClick={saveColorLabelsEditor}
+                className="btn-press px-3 py-1.5 rounded-lg bg-[#C5A66B] hover:bg-[#d5b880] text-[#0f1512] text-[11px] font-bold flex items-center gap-1 shrink-0 self-start sm:self-auto cursor-pointer"
+              >
+                <Check className="w-3.5 h-3.5" />
+                <span>Salvar Títulos</span>
+              </button>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+              {SHEET_COLOR_PALETTE.map((c) => (
+                <div
+                  key={c.id}
+                  className="flex items-center gap-2 bg-[#151d18] border border-[#777F89]/40 rounded-lg px-2.5 py-1.5"
                 >
-                  <Pencil className="w-3 h-3" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onRemoveSheet(sh.id)}
-                  className="btn-press h-7 w-7 rounded-lg bg-[#0b100d] hover:bg-rose-950/60 text-[#A9B99D] hover:text-rose-400 flex items-center justify-center cursor-pointer"
-                  title="Remover da lista"
-                  aria-label={`Remover planilha ${sh.name}`}
+                  <span className={`h-3 w-3 rounded-full shrink-0 ${c.dotClass}`} />
+                  <input
+                    type="text"
+                    maxLength={40}
+                    value={draftColorLabels[c.id] ?? ''}
+                    onChange={(e) =>
+                      setDraftColorLabels((prev) => ({
+                        ...prev,
+                        [c.id]: e.target.value,
+                      }))
+                    }
+                    placeholder={c.defaultLabel}
+                    className="w-full bg-transparent text-xs text-[#EDE9DE] placeholder-[#777F89] focus:outline-none"
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {filteredItems.length === 0 ? (
+          <div className="text-center py-6 text-[#A9B99D] text-xs border border-dashed border-[#777F89]/40 rounded-xl">
+            {items.length === 0
+              ? emptyText
+              : 'Nenhuma planilha ou arquivo encontrado com esta cor selecionada.'}
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {filteredItems.map((sh) => {
+              const front = getFrontStyle(sh.category);
+              const isBoth99 = sh.category === '99';
+              const colorMeta = getSheetColorMeta(sh.color);
+              const colorLabel = sh.color ? getSheetColorLabel(sh.color, sheetColorLabels) : '';
+
+              return (
+                <a
+                  key={sh.id}
+                  href={sh.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className={`interactive-card group p-3.5 rounded-xl bg-[#0f1512]/80 border border-[#777F89]/40 ${
+                    colorMeta ? colorMeta.borderClass : front.cardBorderClass
+                  } flex items-start justify-between gap-3 focus:outline-none`}
                 >
-                  <Trash2 className="w-3 h-3" />
-                </button>
-              </div>
-            </a>
-          );
-        })}
+                  <div className="flex items-start gap-3 min-w-0 flex-1">
+                    <div
+                      className={`h-9 ${isBoth99 ? 'px-2' : 'w-9'} rounded-lg flex items-center justify-center shrink-0 mt-0.5 ${front.iconBgClass}`}
+                    >
+                      {renderFrontIcon(sh.category, sh.type === 'file' ? 'file' : 'sheet')}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <h4 className="text-sm font-bold text-[#EDE9DE] group-hover:text-[#C5A66B] transition-colors leading-snug break-words">
+                        {sh.name}
+                      </h4>
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-[#A9B99D] mt-0.5">
+                        <span>
+                          {sh.type === 'file' ? 'Arquivo' : 'Planilha'} ·{' '}
+                          {isBoth99 ? '99' : front.label}
+                        </span>
+                        {colorMeta && colorLabel && (
+                          <span className={`inline-flex items-center gap-1 font-semibold ${colorMeta.textClass}`}>
+                            <span className={`h-2 w-2 rounded-full shrink-0 ${colorMeta.dotClass}`} />
+                            <span>{colorLabel}</span>
+                          </span>
+                        )}
+                      </div>
+                      {sh.obs && (
+                        <p className="text-[11px] text-[#EDE9DE]/90 bg-[#151d18] border border-[#777F89]/30 rounded-lg px-2 py-1 mt-1.5 break-words leading-snug">
+                          {sh.obs}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div
+                    className="flex items-center gap-1 shrink-0"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                    }}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => onOpenEditSheet(sh)}
+                      className="btn-press h-7 w-7 rounded-lg bg-[#0b100d] hover:bg-[#1b251f] text-[#A9B99D] hover:text-[#EDE9DE] flex items-center justify-center cursor-pointer"
+                      title="Editar Planilha / Cor / Obs"
+                      aria-label={`Editar ${sh.name}`}
+                    >
+                      <Pencil className="w-3 h-3" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onRemoveSheet(sh.id)}
+                      className="btn-press h-7 w-7 rounded-lg bg-[#0b100d] hover:bg-rose-950/60 text-[#A9B99D] hover:text-rose-400 flex items-center justify-center cursor-pointer"
+                      title="Remover da lista"
+                      aria-label={`Remover planilha ${sh.name}`}
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </button>
+                  </div>
+                </a>
+              );
+            })}
+          </div>
+        )}
       </div>
     );
   }
@@ -276,6 +464,19 @@ export function FoldersModule({
 
   const ridesChannelsCount = channels.rides.internos.length + channels.rides.externos.length;
   const foodChannelsCount = channels.food.internos.length + channels.food.externos.length;
+
+  const todayFormattedBR = getBrasiliaTimeParts().formattedDate;
+  const ridesLinkedTasks = tasks.filter((t) => t.product === '99 Rides');
+  const foodLinkedTasks = tasks.filter((t) => t.product === '99 Food');
+  const frontLinkedTasks = tasks.filter((t) => t.product === folderCategory);
+  const filteredFrontTasks = frontLinkedTasks.filter((t) => {
+    if (todoFilterMode === 'all') return true;
+    if (todoFilterMode === 'date') {
+      return isTaskScheduledForDate(t, selectedTodoDate);
+    }
+    // 'today' shows tasks due today OR tasks already concluded today
+    return isTaskDueToday(t) || (t.status === 'concluido' && t.dateStr === todayFormattedBR);
+  });
 
   return (
     <section className="space-y-6">
@@ -395,7 +596,7 @@ export function FoldersModule({
               </div>
             </div>
 
-            {renderSheetsGrid(
+            {renderSheetsOrganizerAndGrid(
               sharedSheets,
               'Nenhuma planilha compartilhada entre Rides e Food cadastrada ainda. Use Upload ou Novo Link para adicionar.',
             )}
@@ -429,7 +630,7 @@ export function FoldersModule({
                     </span>
                     <span className="text-[11px] font-mono text-[#C5A66B] block mt-2 tabular-nums">
                       {ridesSheets.length} planilha(s) · {ridesChannelsCount} canal(is) ·{' '}
-                      {channels.rides.common.length} afazer(es)
+                      {ridesLinkedTasks.length + channels.rides.common.length} afazer(es)
                     </span>
                   </div>
                 </div>
@@ -456,7 +657,7 @@ export function FoldersModule({
                     </span>
                     <span className="text-[11px] font-mono text-orange-300 block mt-2 tabular-nums">
                       {foodSheets.length} planilha(s) · {foodChannelsCount} canal(is) ·{' '}
-                      {channels.food.common.length} afazer(es)
+                      {foodLinkedTasks.length + channels.food.common.length} afazer(es)
                     </span>
                   </div>
                 </div>
@@ -514,7 +715,7 @@ export function FoldersModule({
               </div>
             </div>
 
-            {renderSheetsGrid(
+            {renderSheetsOrganizerAndGrid(
               folderSheets,
               `Nenhuma planilha cadastrada para ${folderCategory} ainda. Use Upload ou Novo Link para adicionar.`,
             )}
@@ -545,32 +746,170 @@ export function FoldersModule({
             </div>
           )}
 
-          {/* Afazeres Comuns */}
-          <div className="bg-[#151d18] border border-[#777F89]/40 rounded-2xl p-4 space-y-3">
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-xs font-bold text-[#EDE9DE] tracking-wide flex items-center gap-2">
-                <ListChecks
-                  className={`w-4 h-4 ${isRides ? 'text-[#C5A66B]' : 'text-orange-300'}`}
-                />
-                <span>{isRides ? 'Afazeres Comuns — 99 Rides' : 'Afazeres Comuns — 99 Food'}</span>
-              </span>
+          {/* Afazeres Comuns vinculados às Tarefas do Dia e datas */}
+          <div className="bg-[#151d18] border border-[#777F89]/40 rounded-2xl p-4 sm:p-5 space-y-3.5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <span className="text-xs sm:text-sm font-bold text-[#EDE9DE] tracking-wide flex items-center gap-2">
+                  <ListChecks
+                    className={`w-4 h-4 ${isRides ? 'text-[#C5A66B]' : 'text-orange-300'}`}
+                  />
+                  <span>{isRides ? 'Afazeres Comuns — 99 Rides' : 'Afazeres Comuns — 99 Food'}</span>
+                </span>
+                <p className="text-[11px] text-[#A9B99D] mt-0.5">
+                  Conectado em tempo real com Tarefas do Dia e Quadro de Tarefas. Filtre por dia ou veja todas as rotinas.
+                </p>
+              </div>
+
               <button
                 type="button"
-                onClick={() => onAddCommonTask(currentFolder)}
-                className="btn-press text-xs text-[#C5A66B] hover:underline font-semibold flex items-center gap-1 whitespace-nowrap shrink-0 cursor-pointer"
+                onClick={() => onOpenNewFrontTask(productLabel)}
+                className="btn-press px-3 py-1.5 rounded-xl bg-[#C5A66B] hover:bg-[#d5b880] text-[#0f1512] text-xs font-bold flex items-center gap-1.5 whitespace-nowrap shrink-0 cursor-pointer self-start sm:self-auto"
               >
                 <Plus className="w-3.5 h-3.5" />
                 <span>Adicionar Afazer</span>
               </button>
             </div>
 
-            {folderData.common.length === 0 ? (
-              <div className="text-center py-4 text-[#A9B99D] text-xs border border-dashed border-[#777F89]/40 rounded-xl">
-                Nenhum afazer cadastrado. Clique em{' '}
-                <strong className="text-[#EDE9DE]">Adicionar Afazer</strong> para criar.
+            {/* Controle de dias e filtro */}
+            <div className="flex flex-wrap items-center gap-2 border-b border-[#777F89]/30 pb-3">
+              <button
+                type="button"
+                onClick={() => setTodoFilterMode('today')}
+                className={`px-2.5 py-1 rounded-lg border text-[11px] font-semibold cursor-pointer transition ${
+                  todoFilterMode === 'today'
+                    ? 'bg-[#C5A66B]/20 border-[#C5A66B] text-[#C5A66B]'
+                    : 'bg-[#0b100d] border-[#777F89]/40 text-[#A9B99D] hover:text-white'
+                }`}
+              >
+                Hoje
+              </button>
+
+              <div className="flex items-center gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setTodoFilterMode('date')}
+                  className={`px-2.5 py-1 rounded-lg border text-[11px] font-semibold flex items-center gap-1 cursor-pointer transition ${
+                    todoFilterMode === 'date'
+                      ? 'bg-[#C5A66B]/20 border-[#C5A66B] text-[#C5A66B]'
+                      : 'bg-[#0b100d] border-[#777F89]/40 text-[#A9B99D] hover:text-white'
+                  }`}
+                >
+                  <Calendar className="w-3 h-3" />
+                  <span>Por Dia</span>
+                </button>
+                {todoFilterMode === 'date' && (
+                  <input
+                    type="date"
+                    value={selectedTodoDate}
+                    onChange={(e) => setSelectedTodoDate(e.target.value)}
+                    className="bg-[#0b100d] border border-[#C5A66B]/50 rounded-lg px-2 py-0.5 text-[11px] text-[#EDE9DE] font-mono focus:outline-none"
+                  />
+                )}
+              </div>
+
+              <button
+                type="button"
+                onClick={() => setTodoFilterMode('all')}
+                className={`px-2.5 py-1 rounded-lg border text-[11px] font-semibold cursor-pointer transition ${
+                  todoFilterMode === 'all'
+                    ? 'bg-[#C5A66B]/20 border-[#C5A66B] text-[#C5A66B]'
+                    : 'bg-[#0b100d] border-[#777F89]/40 text-[#A9B99D] hover:text-white'
+                }`}
+              >
+                Todas ({frontLinkedTasks.length})
+              </button>
+            </div>
+
+            {filteredFrontTasks.length === 0 && folderData.common.length === 0 ? (
+              <div className="text-center py-5 text-[#A9B99D] text-xs border border-dashed border-[#777F89]/40 rounded-xl">
+                {todoFilterMode === 'date'
+                  ? `Nenhum afazer de ${folderCategory} programado para ${formatShortDateBR(selectedTodoDate)}.`
+                  : todoFilterMode === 'today'
+                    ? `Nenhum afazer de ${folderCategory} para hoje.`
+                    : `Nenhum afazer cadastrado em ${folderCategory}.`}{' '}
+                Clique em <strong className="text-[#EDE9DE]">Adicionar Afazer</strong> para criar.
               </div>
             ) : (
               <div className="space-y-1.5 text-xs">
+                {filteredFrontTasks.map((task) => {
+                  const isDone = task.status === 'concluido';
+                  const scheduleLabel = getTaskScheduleLabel(task);
+                  const statusLabel =
+                    task.status === 'concluido'
+                      ? 'Concluído'
+                      : task.status === 'andamento'
+                        ? 'Em Andamento'
+                        : task.status === 'rotina'
+                          ? 'Rotina'
+                          : 'A Fazer';
+
+                  return (
+                    <div
+                      key={task.id}
+                      className="p-2.5 rounded-lg bg-[#0b100d] border border-[#777F89]/40 flex items-center justify-between gap-3 hover:border-[#A9B99D]/60 transition"
+                    >
+                      <label className="flex items-start sm:items-center gap-2.5 min-w-0 cursor-pointer flex-1">
+                        <input
+                          type="checkbox"
+                          checked={isDone}
+                          onChange={() => onToggleTaskDone(task.id)}
+                          className="h-3.5 w-3.5 mt-0.5 sm:mt-0 rounded bg-[#151d18] border-[#777F89]/60 accent-[#C5A66B] cursor-pointer shrink-0"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <span
+                            className={`block break-words font-medium ${
+                              isDone ? 'line-through text-[#A9B99D]' : 'text-[#EDE9DE]'
+                            }`}
+                          >
+                            {task.title}
+                          </span>
+                          <div className="flex flex-wrap items-center gap-1.5 text-[10px] font-mono text-[#A9B99D] mt-0.5">
+                            <span className="text-[#C5A66B] font-semibold">{scheduleLabel}</span>
+                            <span>·</span>
+                            <span>{statusLabel}</span>
+                            {task.channelName && (
+                              <>
+                                <span>·</span>
+                                <span className={getChannelColor(task.channelName).textClass}>
+                                  {task.channelName}
+                                </span>
+                              </>
+                            )}
+                            {task.tag && (
+                              <>
+                                <span>·</span>
+                                <span className="text-[#C5A66B]">#{task.tag}</span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                      </label>
+
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => onOpenEditTask(task)}
+                          className="btn-press text-[#A9B99D] hover:text-[#EDE9DE] p-1 cursor-pointer"
+                          title="Editar afazer / data"
+                          aria-label={`Editar ${task.title}`}
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onDeleteLinkedTask(task.id)}
+                          className="btn-press text-[#A9B99D] hover:text-rose-400 p-1 cursor-pointer"
+                          title="Excluir afazer"
+                          aria-label={`Excluir afazer ${task.title}`}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+
                 {folderData.common.map((item, idx) => (
                   <div
                     key={`${currentFolder}-common-${idx}`}
@@ -586,7 +925,7 @@ export function FoldersModule({
                       <span
                         className={`${
                           item.done ? 'line-through text-[#A9B99D]' : 'text-[#EDE9DE]'
-                        } truncate`}
+                        } break-words`}
                       >
                         {item.title}
                       </span>

@@ -859,30 +859,34 @@ export function syncWavesFromSheet(
       status: row.hasExplicitStatus ? row.status : (matched?.status ?? row.status),
       totalValue: row.totalValue,
       fromSheet: true,
+      tag: matched?.tag,
+      estimatedMinutes: matched?.estimatedMinutes,
     };
   });
 
   return [...syncedFromSheet, ...manualWaves];
 }
 
+function normalizeWaveField(val?: string): string {
+  return (val || '').replace(/\s+/g, ' ').trim();
+}
+
+export function getWavesContentDigest(waves: KishiWavePlan[]): string {
+  return JSON.stringify(
+    waves.map((w) => ({
+      w: normalizeWaveField(w.waveName),
+      p: normalizeWaveField(w.planTitle),
+      u: normalizeWaveField(w.planUrl),
+      s: normalizeWaveField(w.startDate),
+      e: normalizeWaveField(w.endDate),
+      st: w.status,
+      v: normalizeWaveField(w.totalValue),
+    })),
+  );
+}
+
 export function haveWavesChanged(prev: KishiWavePlan[], next: KishiWavePlan[]): boolean {
-  if (prev.length !== next.length) return true;
-  for (let i = 0; i < prev.length; i++) {
-    const a = prev[i];
-    const b = next[i];
-    if (
-      a.waveName !== b.waveName ||
-      a.planTitle !== b.planTitle ||
-      (a.planUrl || '') !== (b.planUrl || '') ||
-      (a.startDate || '') !== (b.startDate || '') ||
-      (a.endDate || '') !== (b.endDate || '') ||
-      a.status !== b.status ||
-      (a.totalValue || '') !== (b.totalValue || '')
-    ) {
-      return true;
-    }
-  }
-  return false;
+  return getWavesContentDigest(prev) !== getWavesContentDigest(next);
 }
 
 

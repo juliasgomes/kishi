@@ -5,6 +5,7 @@ import type {
   KishiTimeRule,
   KishiWavePlan,
 } from '@/src/types/kishi';
+import { isTaskDueToday } from '@/src/utils/taskSchedule';
 
 export const DEFAULT_TIME_TAGS = [
   'Extração',
@@ -165,7 +166,7 @@ export interface RuleMatchResult {
 }
 
 export function matchTimeRule(
-  text: string,
+  _text: string,
   explicitTag: string | undefined,
   rules: KishiTimeRule[],
   scope: 'tasks' | 'extractions',
@@ -177,70 +178,16 @@ export function matchTimeRule(
     return { rule: null, matchType: 'none', score: 0 };
   }
 
-  // 1. Exact tag / etiqueta match
   const normTag = normalizeMatchText(explicitTag || '');
   if (normTag) {
-    const byTag = eligible.find((r) => normalizeMatchText(r.tag) === normTag);
+    const byTag = eligible.find(
+      (r) =>
+        normalizeMatchText(r.tag) === normTag ||
+        normalizeMatchText(r.label) === normTag,
+    );
     if (byTag) {
       return { rule: byTag, matchType: 'tag', score: 1 };
     }
-  }
-
-  // 2. Smart name / keyword matching
-  const normInput = normalizeMatchText(text);
-  const inputTokens = tokenizeOperationalText(text);
-  if (!normInput || inputTokens.length === 0) {
-    return { rule: null, matchType: 'none', score: 0 };
-  }
-
-  let bestRule: KishiTimeRule | null = null;
-  let bestScore = 0;
-
-  for (const rule of eligible) {
-    const normLabel = normalizeMatchText(rule.label);
-    const normRuleTag = normalizeMatchText(rule.tag);
-    let score = 0;
-
-    if (normLabel && (normInput.includes(normLabel) || normLabel.includes(normInput))) {
-      score = Math.max(score, 0.95);
-    }
-    if (normRuleTag && normRuleTag.length >= 3 && normInput.includes(normRuleTag)) {
-      score = Math.max(score, 0.8);
-    }
-
-    const ruleTokens = tokenizeOperationalText(
-      `${rule.label} ${rule.tag} ${(rule.keywords || []).join(' ')}`,
-    );
-    const keywordTokens = new Set(tokenizeOperationalText((rule.keywords || []).join(' ')));
-
-    let hits = 0;
-    let keywordHits = 0;
-    for (const tk of inputTokens) {
-      if (ruleTokens.includes(tk)) {
-        hits += 1;
-        if (keywordTokens.has(tk)) keywordHits += 1;
-      }
-    }
-
-    if (hits > 0) {
-      const unionSize = new Set([...inputTokens, ...ruleTokens]).size;
-      const jaccard = hits / Math.max(1, unionSize);
-      const coverage = hits / Math.max(1, Math.min(inputTokens.length, ruleTokens.length));
-      const tokenScore = Math.min(
-        0.92,
-        coverage * 0.55 + jaccard * 0.25 + Math.min(keywordHits, 2) * 0.14,
-      );
-      score = Math.max(score, tokenScore);
-    }
-
-    if (score > bestScore) {
-      bestScore = score;
-      bestRule = rule;
-    }
-  }
-
-  if (bestRule && bestScore >= 0.34) {
-    return { rule: bestRule, matchType: 'smart', score: bestScore };
   }
 
   return { rule: null, matchType: 'none', score: 0 };
@@ -302,7 +249,7 @@ export function estimateWorkspaceTime(params: {
   const { tasks, activeCampaigns, timeBank } = params;
   const rules = timeBank.timeRules || [];
 
-  const pendingTasks = tasks.filter((t) => t.status !== 'concluido');
+  const pendingTasks = tasks.filter((t) => isTaskDueToday(t));
   const taskEstimates: EstimatedTaskItem[] = pendingTasks.map((task) => {
     if (typeof task.estimatedMinutes === 'number' && task.estimatedMinutes >= 0) {
       return {
@@ -313,15 +260,12 @@ export function estimateWorkspaceTime(params: {
       };
     }
 
-    const searchText = [task.title, task.channelName, task.product, task.subBrand]
-      .filter(Boolean)
-      .join(' ');
-    const matched = matchTimeRule(searchText, task.tag, rules, 'tasks');
+    const matched = matchTimeRule('', task.tag, rules, 'tasks');
     if (matched.rule) {
       return {
         task,
         minutes: matched.rule.minutes,
-        matchType: matched.matchType === 'tag' ? 'tag' : 'smart',
+        matchType: 'tag',
         matchedRule: matched.rule,
       };
     }
@@ -354,21 +298,7 @@ export function estimateWorkspaceTime(params: {
         continue;
       }
 
-      const waveText = [
-        wave.waveName,
-        wave.planTitle,
-        campaign.name,
-        campaign.front,
-        'extrair extracao',
-      ]
-        .filter(Boolean)
-        .join(' ');
-      const matched = matchTimeRule(
-        waveText,
-        wave.tag || 'Extração',
-        rules,
-        'extractions',
-      );
+      const matched = matchTimeRule('', wave.tag || 'Extração', rules, 'extractions');
       if (matched.rule) {
         waveEstimates.push({
           campaignId: campaign.id,
@@ -376,7 +306,7 @@ export function estimateWorkspaceTime(params: {
           front: campaign.front,
           wave,
           minutes: matched.rule.minutes,
-          matchType: matched.matchType === 'tag' ? 'tag' : 'smart',
+          matchType: 'tag',
           matchedRule: matched.rule,
         });
       } else if ((timeBank.defaultWaveMinutes || 0) > 0) {
@@ -404,21 +334,7 @@ export function estimateWorkspaceTime(params: {
 
     for (const todo of campaign.todos) {
       if (todo.done) continue;
-      const todoText = [todo.text, todo.waveRef, campaign.name, campaign.front]
-        .filter(Boolean)
-        .join(' ');
-      const matched = matchTimeRule(todoText, undefined, rules, 'tasks');
-      if (matched.rule) {
-        todoEstimates.push({
-          campaignId: campaign.id,
-          campaignName: campaign.name,
-          todoId: todo.id,
-          text: todo.text,
-          minutes: matched.rule.minutes,
-          matchType: matched.matchType === 'tag' ? 'tag' : 'smart',
-          matchedRule: matched.rule,
-        });
-      } else if ((timeBank.defaultTodoMinutes || 0) > 0) {
+      if ((timeBank.defaultTodoMinutes || 0) > 0) {
         todoEstimates.push({
           campaignId: campaign.id,
           campaignName: campaign.name,

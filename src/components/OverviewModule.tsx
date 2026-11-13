@@ -24,6 +24,7 @@ import type {
 import { AnalyticsCharts } from '@/src/components/AnalyticsCharts';
 import { DailyBriefingMural } from '@/src/components/DailyBriefingMural';
 import { getChannelColor, getFrontStyle } from '@/src/utils/channelColors';
+import { getTaskScheduleLabel, isTaskDueToday } from '@/src/utils/taskSchedule';
 
 interface OverviewModuleProps {
   userName: string;
@@ -55,7 +56,7 @@ export function OverviewModule({
   onGoToCampaigns,
 }: OverviewModuleProps) {
   const [expandedPreviewIds, setExpandedPreviewIds] = useState<Record<string, boolean>>({});
-  const pendingTasks = tasks.filter((t) => t.status !== 'concluido');
+  const pendingTasks = tasks.filter((t) => isTaskDueToday(t));
   const inProgressCount = tasks.filter((t) => t.status === 'andamento').length;
 
   const ridesCampaigns = activeCampaigns.filter((c) => c.front === '99 Rides');
@@ -393,7 +394,7 @@ export function OverviewModule({
                           </>
                         )}
                         <span aria-hidden="true">·</span>
-                        <span>{task.frequency}</span>
+                        <span>{getTaskScheduleLabel(task)}</span>
                         {task.tag && (
                           <>
                             <span aria-hidden="true">·</span>

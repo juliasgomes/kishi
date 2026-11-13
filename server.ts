@@ -1,5 +1,4 @@
 import express from 'express';
-import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
@@ -7,118 +6,51 @@ import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-const DATA_FILE = path.join(__dirname, 'src', 'data', 'kishi-data.json');
-const UPLOADS_DIR = path.join(__dirname, 'public', 'uploads');
-
-function isValidKishiState(payload: unknown): boolean {
-  if (!payload || typeof payload !== 'object') return false;
-  const obj = payload as Record<string, unknown>;
-  return (
-    typeof obj.user === 'object' &&
-    obj.user !== null &&
-    Array.isArray(obj.sheets) &&
-    typeof obj.channels === 'object' &&
-    obj.channels !== null &&
-    Array.isArray(obj.tasks) &&
-    Array.isArray(obj.history)
-  );
-}
-
-async function ensureDirs() {
-  await fs.mkdir(path.dirname(DATA_FILE), { recursive: true });
-  await fs.mkdir(UPLOADS_DIR, { recursive: true });
-}
-
-let writeQueue: Promise<void> = Promise.resolve();
-
-function queueWriteData(jsonString: string): Promise<void> {
-  writeQueue = writeQueue.then(async () => {
-    const tmpFile = `${DATA_FILE}.tmp`;
-    await fs.writeFile(tmpFile, jsonString, 'utf-8');
-    await fs.rename(tmpFile, DATA_FILE);
-  });
-  return writeQueue;
-}
-
 async function startServer() {
-  await ensureDirs();
-
   const app = express();
-  app.use(express.json({ limit: '30mb' }));
+  app.disable('x-powered-by');
+  app.use(express.json({ limit: '1mb' }));
 
-  app.get('/api/data', async (_req, res) => {
-    try {
-      const raw = await fs.readFile(DATA_FILE, 'utf-8');
-      res.setHeader('Content-Type', 'application/json');
-      res.send(raw);
-    } catch (error) {
-      console.error('Erro ao ler kishi-data.json:', error);
-      res.status(500).json({ error: 'Falha ao carregar dados do repositório.' });
+  // LGPD & HTTP Security Headers
+  app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'SAMEORIGIN');
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    if (req.path.startsWith('/api/')) {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+      res.setHeader('Pragma', 'no-cache');
     }
+    next();
   });
 
-  app.put('/api/data', async (req, res) => {
-    try {
-      if (!isValidKishiState(req.body)) {
-        res.status(400).json({ error: 'Estrutura de dados inválida.' });
-        return;
-      }
-      const formatted = JSON.stringify(req.body, null, 2) + '\n';
-      await queueWriteData(formatted);
-      res.json({ ok: true });
-    } catch (error) {
-      console.error('Erro ao salvar kishi-data.json:', error);
-      res.status(500).json({ error: 'Falha ao gravar dados no repositório.' });
-    }
+  // Disabled unauthenticated repository read/write endpoints for LGPD protection
+  app.get('/api/data', (_req, res) => {
+    res.status(403).json({
+      error: 'Acesso restrito. Os dados do workspace são privados e protegidos na nuvem autenticada.',
+    });
   });
 
-  app.post('/api/upload', async (req, res) => {
-    try {
-      const { filename, contentBase64 } = req.body as {
-        filename?: string;
-        contentBase64?: string;
-      };
-
-      if (!filename || !contentBase64) {
-        res.status(400).json({ error: 'Arquivo inválido.' });
-        return;
-      }
-
-      const safeBaseName = path
-        .basename(filename)
-        .replace(/[^a-zA-Z0-9._-]/g, '_');
-      const storedName = `${Date.now()}_${safeBaseName}`;
-      const targetPath = path.join(UPLOADS_DIR, storedName);
-
-      const cleanBase64 = contentBase64.includes(',')
-        ? contentBase64.split(',')[1]
-        : contentBase64;
-      const buffer = Buffer.from(cleanBase64, 'base64');
-
-      await fs.writeFile(targetPath, buffer);
-      res.json({ url: `/uploads/${storedName}`, storedName });
-    } catch (error) {
-      console.error('Erro ao salvar arquivo enviado:', error);
-      res.status(500).json({ error: 'Falha ao salvar arquivo no servidor.' });
-    }
+  app.put('/api/data', (_req, res) => {
+    res.status(403).json({
+      error: 'Gravação local no repositório desativada por proteção LGPD.',
+    });
   });
 
-  app.delete('/api/upload/:filename', async (req, res) => {
-    try {
-      const safeName = path.basename(req.params.filename);
-      const targetPath = path.join(UPLOADS_DIR, safeName);
-      await fs.unlink(targetPath).catch(() => undefined);
-      res.json({ ok: true });
-    } catch (error) {
-      console.error('Erro ao excluir arquivo:', error);
-      res.status(500).json({ error: 'Falha ao excluir arquivo.' });
-    }
+  app.post('/api/upload', (_req, res) => {
+    res.status(403).json({
+      error: 'Upload público em disco desativado por proteção LGPD.',
+    });
+  });
+
+  app.delete('/api/upload/:filename', (_req, res) => {
+    res.json({ ok: true });
   });
 
   app.post('/api/sync-google-sheet', async (req, res) => {
     try {
       const { url } = req.body as { url?: string };
-      if (!url || typeof url !== 'string') {
+      if (!url || typeof url !== 'string' || url.length > 2048) {
         res.status(400).json({ ok: false, error: 'URL inválida.' });
         return;
       }
@@ -163,6 +95,7 @@ async function startServer() {
       const response = await fetch(exportUrl, {
         redirect: 'follow',
         cache: 'no-store',
+        signal: AbortSignal.timeout(10000),
         headers: {
           'User-Agent': 'Mozilla/5.0 (compatible; KishiSync/1.0)',
           'Cache-Control': 'no-cache, no-store, must-revalidate',
@@ -218,6 +151,26 @@ async function startServer() {
         return;
       }
 
+      // Send only aggregate non-PII counters & durations (never task/campaign titles or URLs)
+      const sanitizedContext = {
+        greeting: typeof context.greeting === 'string' ? context.greeting.slice(0, 30) : 'Olá',
+        brasiliaTime: typeof context.brasiliaTime === 'string' ? context.brasiliaTime.slice(0, 16) : '',
+        doneTodayCount: Number(context.doneTodayCount) || 0,
+        pendingTasksCount: Number(context.pendingTasksCount) || 0,
+        inProgressCount: Number(context.inProgressCount) || 0,
+        dailyCount: Number(context.dailyCount) || 0,
+        scheduledCount: Number(context.scheduledCount) || 0,
+        unextractedCount: Number(context.unextractedCount) || 0,
+        foodPendingWaves: Number(context.foodPendingWaves) || 0,
+        ridesPendingWaves: Number(context.ridesPendingWaves) || 0,
+        campaignsWithPending: Number(context.campaignsWithPending) || 0,
+        pendingTodosCount: Number(context.pendingTodosCount) || 0,
+        estimatedTotal: typeof context.estimatedTotal === 'string' ? context.estimatedTotal.slice(0, 24) : '',
+        remainingWorkTime:
+          typeof context.remainingWorkTime === 'string' ? context.remainingWorkTime.slice(0, 24) : '',
+        balance: typeof context.balance === 'string' ? context.balance.slice(0, 40) : '',
+      };
+
       const ai = new GoogleGenAI({
         apiKey,
         httpOptions: {
@@ -229,11 +182,11 @@ async function startServer() {
 
       const response = await ai.models.generateContent({
         model: 'gemini-4-hydrogen',
-        contents: `Gere um briefing operacional curto e direto em português do Brasil baseado nestes dados:\n${JSON.stringify(context)}`,
+        contents: `Gere um briefing operacional curto e direto em português do Brasil baseado nestes indicadores:\n${JSON.stringify(sanitizedContext)}`,
         config: {
           thinkingConfig: { thinkingLevel: ThinkingLevel.LOW },
           systemInstruction:
-            'Você é a assistente operacional do workspace KISHI (99 Rides e 99 Food). Não se apresente nem diga "Eu sou a Dot". Fale em tom claro, acolhedor e objetivo em no máximo 3 frases curtas. Destaque o que há para fazer hoje, o total de itens não extraídos e compare o tempo total estimado nas tarefas com o tempo restante no trabalho / banco de horas, sugerindo a melhor ordem de prioridade. Use ortografia e concordância impecáveis em português do Brasil.',
+            'Você é a assistente operacional do workspace KISHI. Não se apresente nem diga "Eu sou a Dot". Fale em tom claro, acolhedor e objetivo em no máximo 3 frases curtas. Destaque os totais pendentes do dia, itens não extraídos e compare o tempo estimado com o tempo restante no trabalho / banco de horas. Use ortografia e concordância impecáveis em português do Brasil.',
         },
       });
 
@@ -252,8 +205,6 @@ async function startServer() {
       });
     }
   });
-
-  app.use('/uploads', express.static(UPLOADS_DIR));
 
   if (process.env.NODE_ENV !== 'production') {
     const { createServer: createViteServer } = await import('vite');

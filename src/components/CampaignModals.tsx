@@ -1,4 +1,4 @@
-import { useEffect, useState, type ChangeEvent, type ClipboardEvent } from 'react';
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type ClipboardEvent } from 'react';
 import {
   AlertCircle,
   Car,
@@ -13,8 +13,10 @@ import {
   UtensilsCrossed,
   X,
 } from 'lucide-react';
+import { DuplicateLinkNotice } from '@/src/components/DuplicateLinkNotice';
 import type {
   KishiActiveCampaign,
+  KishiState,
   KishiWavePlan,
   WaveStatus,
 } from '@/src/types/kishi';
@@ -25,11 +27,13 @@ import {
   parseHtmlListItems,
   type ParsedSheetRow,
 } from '@/src/utils/sheetParser';
+import { findDuplicateLinks } from '@/src/utils/urlDuplicates';
 
 interface CampaignSetupModalProps {
   open: boolean;
   editingCampaign?: KishiActiveCampaign | null;
   defaultFront?: '99 Rides' | '99 Food';
+  workspaceState?: KishiState;
   onClose: () => void;
   onSave: (payload: {
     id?: string;
@@ -47,6 +51,7 @@ export function CampaignSetupModal({
   open,
   editingCampaign,
   defaultFront = '99 Food',
+  workspaceState,
   onClose,
   onSave,
 }: CampaignSetupModalProps) {
@@ -65,8 +70,15 @@ export function CampaignSetupModal({
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'error' | 'info'; message: string } | null>(null);
 
+  const wasOpenRef = useRef(false);
+
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      wasOpenRef.current = false;
+      return;
+    }
+    if (wasOpenRef.current) return;
+    wasOpenRef.current = true;
     if (editingCampaign) {
       setName(editingCampaign.name);
       setFront(editingCampaign.front);
@@ -96,6 +108,14 @@ export function CampaignSetupModal({
     setSaving(false);
     setFeedback(null);
   }, [open, editingCampaign, defaultFront]);
+
+  const sheetDuplicateMatches = useMemo(() => {
+    if (!open) return [];
+    return findDuplicateLinks(sheetUrl, workspaceState, {
+      kind: 'campaign',
+      id: editingCampaign?.id,
+    });
+  }, [open, sheetUrl, workspaceState, editingCampaign?.id]);
 
   if (!open) return null;
 
@@ -359,6 +379,8 @@ export function CampaignSetupModal({
               </button>
             </div>
 
+            <DuplicateLinkNotice matches={sheetDuplicateMatches} />
+
             <label className="flex items-center gap-2 text-[11px] text-[#EDE9DE] cursor-pointer pt-0.5">
               <input
                 type="checkbox"
@@ -568,6 +590,7 @@ interface WavePlanModalProps {
   open: boolean;
   campaignName: string;
   editingWave?: KishiWavePlan | null;
+  workspaceState?: KishiState;
   onClose: () => void;
   onSave: (payload: {
     id?: string;
@@ -585,6 +608,7 @@ export function WavePlanModal({
   open,
   campaignName,
   editingWave,
+  workspaceState,
   onClose,
   onSave,
 }: WavePlanModalProps) {
@@ -596,8 +620,15 @@ export function WavePlanModal({
   const [status, setStatus] = useState<WaveStatus>('nao_extraido');
   const [totalValue, setTotalValue] = useState('');
 
+  const wasOpenRef = useRef(false);
+
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      wasOpenRef.current = false;
+      return;
+    }
+    if (wasOpenRef.current) return;
+    wasOpenRef.current = true;
     if (editingWave) {
       setWaveName(editingWave.waveName);
       setPlanTitle(editingWave.planTitle);
@@ -616,6 +647,14 @@ export function WavePlanModal({
       setTotalValue('');
     }
   }, [open, editingWave]);
+
+  const duplicateMatches = useMemo(() => {
+    if (!open) return [];
+    return findDuplicateLinks(planUrl, workspaceState, {
+      kind: 'wave',
+      id: editingWave?.id,
+    });
+  }, [open, planUrl, workspaceState, editingWave?.id]);
 
   if (!open) return null;
 
@@ -697,6 +736,7 @@ export function WavePlanModal({
               placeholder="https://docs.google.com/spreadsheets/..."
               className="w-full bg-[#0b100d] border border-[#777F89]/60 rounded-xl p-2.5 text-[#EDE9DE] placeholder-[#777F89] focus:outline-none focus:border-[#C5A66B]"
             />
+            <DuplicateLinkNotice matches={duplicateMatches} />
           </div>
 
           <div className="grid grid-cols-2 gap-3">

@@ -1,6 +1,7 @@
 import { Component, type ErrorInfo, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { registerSW } from 'virtual:pwa-register';
+import { clearSensitiveLocalCaches } from '@/src/services/kishiApi';
 import App from './App.tsx';
 import './index.css';
 
@@ -49,11 +50,7 @@ class RootErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundary
               <button
                 type="button"
                 onClick={() => {
-                  try {
-                    localStorage.removeItem('kishi_storage_v1');
-                  } catch {
-                    // ignore
-                  }
+                  clearSensitiveLocalCaches();
                   window.location.reload();
                 }}
                 className="px-4 py-2 rounded-xl bg-[#C5A66B] text-[#0f1512] text-xs font-bold cursor-pointer"

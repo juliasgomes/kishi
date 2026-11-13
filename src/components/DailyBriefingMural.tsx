@@ -16,6 +16,7 @@ import type {
   KishiTimeBank,
 } from '@/src/types/kishi';
 import { estimateWorkspaceTime } from '@/src/utils/timeEstimator';
+import { isTaskDueToday } from '@/src/utils/taskSchedule';
 import {
   computeWorkHoursStats,
   formatDuration,
@@ -84,11 +85,14 @@ export function DailyBriefingMural({
   );
 
   const summary = useMemo(() => {
-    const pendingTasks = tasks.filter((t) => t.status !== 'concluido');
+    const pendingTasks = tasks.filter((t) => isTaskDueToday(t));
     const inProgressTasks = pendingTasks.filter((t) => t.status === 'andamento');
     const dailyTasks = pendingTasks.filter((t) => t.frequency === 'Diária');
     const scheduledTasks = pendingTasks.filter(
-      (t) => t.frequency === 'Semanal' || t.frequency === 'Pontual',
+      (t) =>
+        t.frequency === 'Semanal' ||
+        t.frequency === 'Pontual' ||
+        t.frequency === 'Mensal',
     );
 
     const allWaves = activeCampaigns.flatMap((c) => c.waves);
@@ -266,7 +270,6 @@ export function DailyBriefingMural({
             inProgressCount: summary.inProgressCount,
             dailyCount: summary.dailyCount,
             scheduledCount: summary.scheduledCount,
-            topTasks: summary.topPriorityNames,
             unextractedCount: summary.unextractedCount,
             foodPendingWaves: summary.foodPendingWaves,
             ridesPendingWaves: summary.ridesPendingWaves,

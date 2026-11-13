@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ChangeEvent } from 'react';
 import {
+  Bell,
   Calendar,
   CheckCircle2,
   Clock,
@@ -13,6 +14,7 @@ import {
   LogOut,
   Megaphone,
   Search,
+  ShieldCheck,
   Table2,
   Upload,
   UserPen,
@@ -42,6 +44,7 @@ import {
 } from '@/src/components/Modals';
 import { LoginScreen } from '@/src/components/LoginScreen';
 import { OverviewModule } from '@/src/components/OverviewModule';
+import { PrivacySecurityModal } from '@/src/components/PrivacySecurityModal';
 import { OfflineIndicator } from '@/src/components/PWAInstallButton';
 import {
   createWorkspaceDoc,
@@ -56,6 +59,7 @@ import {
 } from '@/src/services/firebaseSync';
 import { DEFAULT_TIME_RULES } from '@/src/utils/timeEstimator';
 import {
+  clearSensitiveLocalCaches,
   deleteUploadedSheetFile,
   fetchKishiState,
   getFormattedDateHeader,
@@ -86,12 +90,22 @@ import type {
   WaveStatus,
 } from '@/src/types/kishi';
 import {
-  haveWavesChanged,
+  getWavesContentDigest,
   mergeParsedWaves,
   parseDelimitedSheetText,
   syncWavesFromSheet,
   type ParsedSheetRow,
 } from '@/src/utils/sheetParser';
+import {
+  getBrasiliaTodayISO,
+  isMonthlyDayMatch,
+  isTaskDueToday,
+} from '@/src/utils/taskSchedule';
+import {
+  hashNormalizedCsv,
+  isGoogleSheetsUrl,
+} from '@/src/utils/urlDuplicates';
+import { getBrasiliaTimeParts } from '@/src/utils/workHours';
 
 const VALID_ROUTES: RouteId[] = [
   'visao-geral',
@@ -116,15 +130,35 @@ export default function App() {
   const [activeFolderTab, setActiveFolderTab] = useState<FolderTab>('overview');
   const [dateHeader, setDateHeader] = useState<string>(getFormattedDateHeader);
 
-  // Search & Profile dropdowns
+  // Search, Alerts & Profile dropdowns
   const [searchQuery, setSearchQuery] = useState('');
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
+  const [alertsMenuOpen, setAlertsMenuOpen] = useState(false);
+  const [sheetAlerts, setSheetAlerts] = useState<
+    Array<{
+      id: string;
+      title: string;
+      kind: 'campaign' | 'channel';
+      timeFormatted: string;
+      unread: boolean;
+    }>
+  >([]);
+  const [privacyModalOpen, setPrivacyModalOpen] = useState(false);
+  const [autoLockEnabled, setAutoLockEnabled] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('kishi_autolock_v1') === 'true';
+    } catch {
+      return false;
+    }
+  });
   const searchBoxRef = useRef<HTMLDivElement | null>(null);
   const profileBoxRef = useRef<HTMLDivElement | null>(null);
+  const alertsBoxRef = useRef<HTMLDivElement | null>(null);
 
   // Modals
   const [taskModalOpen, setTaskModalOpen] = useState(false);
   const [editingTask, setEditingTask] = useState<KishiTask | null>(null);
+  const [taskDefaultProduct, setTaskDefaultProduct] = useState<ProductType>('99 Rides');
 
   const [channelModalOpen, setChannelModalOpen] = useState(false);
   const [channelModalFolder, setChannelModalFolder] = useState<FolderKey>('rides');
@@ -205,6 +239,7 @@ export default function App() {
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [emailVerified, setEmailVerified] = useState(false);
+  const [cloudSyncedOnce, setCloudSyncedOnce] = useState(false);
   const authUserRef = useRef<User | null>(null);
   const cloudDocReadyRef = useRef(false);
   const lastCloudHashRef = useRef('');
@@ -214,16 +249,21 @@ export default function App() {
   }, [authUser]);
 
   const lastAutoSyncAtRef = useRef<number>(0);
+  const syncInFlightRef = useRef(false);
+  const lastCsvSnapshotRef = useRef<Record<string, string>>({});
+  const lastAlertedDigestRef = useRef<Record<string, string>>({});
 
   const commitState = useCallback(
     (updater: (prev: KishiState) => KishiState) => {
       setState((prev) => {
         const next = updater(prev);
-        void persistKishiState(next);
         const currentUid = authUserRef.current?.uid;
+        if (currentUid && authUserRef.current?.emailVerified) {
+          void persistKishiState(next, currentUid);
+        }
         if (currentUid && authUserRef.current?.emailVerified && cloudDocReadyRef.current) {
           try {
-            lastCloudHashRef.current = JSON.stringify(next);
+            lastCloudHashRef.current = JSON.stringify(normalizeKishiState(next));
           } catch {
             // ignore hash stringify edge cases
           }
@@ -237,23 +277,60 @@ export default function App() {
     [],
   );
 
-  // Apply day rollover when midnight passes
+  // Apply day rollover when midnight passes (including Diária, Mensal e datas agendadas)
   const applyDayRollover = useCallback(
     (current: KishiState): { next: KishiState; rolledOver: boolean } => {
-      const currentToday = getFormattedToday();
+      const brt = getBrasiliaTimeParts();
+      const currentToday = brt.formattedDate;
       if (current.lastDateStr === currentToday) {
         return { next: current, rolledOver: false };
       }
+
+      const todayISO = getBrasiliaTodayISO();
 
       const nextTasks = current.tasks.map((t) => {
         if (t.frequency === 'Diária') {
           return {
             ...t,
-            status: t.status === 'concluido' ? ('andamento' as TaskStatus) : t.status,
+            status: t.status === 'concluido' ? ('afazer' as TaskStatus) : t.status,
             completedAt: t.status === 'concluido' ? null : t.completedAt,
             dateStr: currentToday,
           };
         }
+
+        if (t.frequency === 'Mensal' && t.monthlyDay) {
+          const matchesToday = isMonthlyDayMatch(t.monthlyDay, brt.year, brt.month, brt.day);
+          if (matchesToday) {
+            return {
+              ...t,
+              status:
+                t.status === 'rotina' || t.status === 'concluido'
+                  ? ('afazer' as TaskStatus)
+                  : t.status,
+              completedAt: null,
+              dateStr: currentToday,
+            };
+          }
+          if (t.status === 'concluido') {
+            return {
+              ...t,
+              status: 'rotina' as TaskStatus,
+              completedAt: null,
+              dateStr: currentToday,
+            };
+          }
+          return { ...t, dateStr: currentToday };
+        }
+
+        if (t.scheduledDate && t.status === 'rotina' && todayISO >= t.scheduledDate) {
+          return {
+            ...t,
+            status: 'afazer' as TaskStatus,
+            completedAt: null,
+            dateStr: currentToday,
+          };
+        }
+
         if (t.status !== 'concluido') {
           return { ...t, dateStr: currentToday };
         }
@@ -285,37 +362,51 @@ export default function App() {
     [],
   );
 
-  // Initial load from /api/data or local cache
-  useEffect(() => {
-    let mounted = true;
-    fetchKishiState().then(({ state: loaded }) => {
-      if (!mounted) return;
-      const { next, rolledOver } = applyDayRollover(loaded);
-      setState(next);
-      setIsLoaded(true);
-      if (rolledOver) {
-        void persistKishiState(next);
-        showToast('Novo dia iniciado! Tarefas diárias atualizadas.');
-      }
-    });
-    return () => {
-      mounted = false;
-    };
-  }, [applyDayRollover, showToast]);
-
   // Firebase Auth listener
   useEffect(() => {
     const unsubAuth = subscribeToAuth((user) => {
       setAuthUser(user);
       setEmailVerified(Boolean(user?.emailVerified));
       setAuthReady(true);
-      if (!user) {
+      if (!user || !user.emailVerified) {
         cloudDocReadyRef.current = false;
+        setCloudSyncedOnce(false);
         lastCloudHashRef.current = '';
+        lastCsvSnapshotRef.current = {};
+        lastAlertedDigestRef.current = {};
+        setSheetAlerts([]);
+        setState(normalizeKishiState(bundledSeedData as KishiState));
+        if (!user) {
+          clearSensitiveLocalCaches();
+        }
       }
     });
     return () => unsubAuth();
   }, []);
+
+  // Load UID-scoped offline cache ONLY when authenticated & verified (LGPD protection)
+  useEffect(() => {
+    if (!authReady) return;
+    if (!authUser || !emailVerified) {
+      setIsLoaded(true);
+      return;
+    }
+
+    let mounted = true;
+    fetchKishiState(authUser.uid).then(({ state: loaded }) => {
+      if (!mounted) return;
+      const { next, rolledOver } = applyDayRollover(loaded);
+      setState(next);
+      setIsLoaded(true);
+      if (rolledOver) {
+        void persistKishiState(next, authUser.uid);
+        showToast('Novo dia iniciado! Tarefas diárias atualizadas.');
+      }
+    });
+    return () => {
+      mounted = false;
+    };
+  }, [authReady, authUser, emailVerified, applyDayRollover, showToast]);
 
   // Real-time Firestore cross-device sync (PC <-> Mobile in the same second)
   useEffect(() => {
@@ -324,19 +415,22 @@ export default function App() {
     const unsubDoc = subscribeWorkspaceDoc(authUser.uid, {
       onRemoteData: (remoteState, hasPendingWrites) => {
         cloudDocReadyRef.current = true;
+        setCloudSyncedOnce(true);
         const { next, rolledOver } = applyDayRollover(remoteState);
         let nextHash = '';
         try {
-          nextHash = JSON.stringify(next);
+          nextHash = JSON.stringify(normalizeKishiState(next));
         } catch {
           nextHash = String(Date.now());
         }
         if (nextHash !== lastCloudHashRef.current) {
           lastCloudHashRef.current = nextHash;
           setState(next);
-          void persistKishiState(next);
+          void persistKishiState(next, authUser.uid);
           if (rolledOver && !hasPendingWrites) {
-            void updateWorkspaceDoc(authUser.uid, next).catch(() => undefined);
+            void updateWorkspaceDoc(authUser.uid, next).catch((err) => {
+              console.error('Erro ao salvar virada de dia na nuvem:', err);
+            });
           }
         }
       },
@@ -344,6 +438,7 @@ export default function App() {
         void createWorkspaceDoc(authUser.uid, stateRef.current)
           .then(() => {
             cloudDocReadyRef.current = true;
+            setCloudSyncedOnce(true);
           })
           .catch((err) => {
             console.error('Erro ao criar workspace inicial na nuvem:', err);
@@ -386,15 +481,48 @@ export default function App() {
     await resendVerificationEmail(authUser);
   }
 
-  async function handleDisconnectCloud() {
+  const handleDisconnectCloud = useCallback(async () => {
+    const uid = authUserRef.current?.uid;
     try {
-      await signOutFirebase();
+      clearSensitiveLocalCaches(uid);
       setProfileMenuOpen(false);
-      showToast('Você saiu da sua conta.');
+      setPrivacyModalOpen(false);
+      setSheetAlerts([]);
+      lastCsvSnapshotRef.current = {};
+      lastAlertedDigestRef.current = {};
+      lastCloudHashRef.current = '';
+      setState(normalizeKishiState(bundledSeedData as KishiState));
+      await signOutFirebase();
+      showToast('Sessão encerrada e dados locais limpos.');
     } catch {
       showToast('Erro ao sair da conta.');
     }
-  }
+  }, [showToast]);
+
+  // Opt-in LGPD Auto-Lock after 30 minutes of inactivity
+  useEffect(() => {
+    if (!autoLockEnabled || !authUser || !emailVerified) return;
+
+    const INACTIVITY_MS = 30 * 60 * 1000;
+    let timerId = window.setTimeout(() => {
+      void handleDisconnectCloud();
+    }, INACTIVITY_MS);
+
+    const resetTimer = () => {
+      window.clearTimeout(timerId);
+      timerId = window.setTimeout(() => {
+        void handleDisconnectCloud();
+      }, INACTIVITY_MS);
+    };
+
+    window.addEventListener('pointerdown', resetTimer, { passive: true });
+    window.addEventListener('keydown', resetTimer, { passive: true });
+    return () => {
+      window.clearTimeout(timerId);
+      window.removeEventListener('pointerdown', resetTimer);
+      window.removeEventListener('keydown', resetTimer);
+    };
+  }, [autoLockEnabled, authUser, emailVerified, handleDisconnectCloud]);
 
   // Periodic day rollover & date header check
   useEffect(() => {
@@ -404,7 +532,7 @@ export default function App() {
       setState((prev) => {
         const { next, rolledOver } = applyDayRollover(prev);
         if (rolledOver) {
-          void persistKishiState(next);
+          void persistKishiState(next, authUserRef.current?.uid);
           showToast('Novo dia iniciado! Tarefas diárias atualizadas.');
           return next;
         }
@@ -443,7 +571,12 @@ export default function App() {
         return false;
       }
 
-      const parsedRows = parseDelimitedSheetText(res.csv);
+      const normalizedCsv = res.csv.replace(/\r\n/g, '\n').trim();
+      if (silent && lastCsvSnapshotRef.current[campaignId] === normalizedCsv) {
+        return false;
+      }
+
+      const parsedRows = parseDelimitedSheetText(normalizedCsv);
       if (parsedRows.length === 0) {
         if (!silent) {
           showToast(`Nenhuma linha encontrada na aba de "${target.name}".`);
@@ -451,87 +584,269 @@ export default function App() {
         return false;
       }
 
-      const syncStamp = `${getFormattedToday()} às ${getFormattedTimeNow()}`;
-      let changed = false;
+      const latestCamp = stateRef.current.activeCampaigns.find((c) => c.id === campaignId);
+      if (!latestCamp) return false;
+
+      const nextWaves = syncWavesFromSheet(latestCamp.waves, parsedRows);
+      const prevDigest = getWavesContentDigest(latestCamp.waves);
+      const nextDigest = getWavesContentDigest(nextWaves);
+      const changed = prevDigest !== nextDigest;
+
+      lastCsvSnapshotRef.current[campaignId] = normalizedCsv;
+
+      if (!changed) {
+        lastAlertedDigestRef.current[campaignId] = nextDigest;
+        if (silent) {
+          return false;
+        }
+        showToast(`"${latestCamp.name}" já está atualizada (${parsedRows.length} planos).`);
+        return false;
+      }
+
+      const shouldAlert = lastAlertedDigestRef.current[campaignId] !== nextDigest;
+      lastAlertedDigestRef.current[campaignId] = nextDigest;
+
+      const timeNow = getFormattedTimeNow();
+      const syncStamp = `${getFormattedToday()} às ${timeNow}`;
 
       setState((prev) => {
         const currentCamp = prev.activeCampaigns.find((c) => c.id === campaignId);
         if (!currentCamp) return prev;
-        const nextWaves = syncWavesFromSheet(currentCamp.waves, parsedRows);
-        changed = haveWavesChanged(currentCamp.waves, nextWaves);
-
-        if (!changed && silent) return prev;
+        const freshNextWaves = syncWavesFromSheet(currentCamp.waves, parsedRows);
 
         const nextState: KishiState = {
           ...prev,
           activeCampaigns: prev.activeCampaigns.map((c) =>
             c.id === campaignId
-              ? { ...c, waves: nextWaves, lastSyncedAt: syncStamp }
+              ? { ...c, waves: freshNextWaves, lastSyncedAt: syncStamp }
               : c,
           ),
         };
-        void persistKishiState(nextState);
         const currentUid = authUserRef.current?.uid;
+        void persistKishiState(nextState, currentUid);
         if (currentUid && authUserRef.current?.emailVerified && cloudDocReadyRef.current) {
           try {
-            lastCloudHashRef.current = JSON.stringify(nextState);
+            lastCloudHashRef.current = JSON.stringify(normalizeKishiState(nextState));
           } catch {
             // ignore
           }
-          void updateWorkspaceDoc(currentUid, nextState).catch(() => undefined);
+          void updateWorkspaceDoc(currentUid, nextState).catch((err) => {
+            console.error('Erro ao salvar sincronização da planilha na nuvem:', err);
+          });
         }
         return nextState;
       });
 
-      if (changed && silent) {
-        showToast(`Planilha de "${target.name}" atualizada automaticamente!`);
-      } else if (!silent) {
-        showToast(
-          changed
-            ? `"${target.name}" sincronizada com novidades!`
-            : `"${target.name}" já está 100% atualizada (${parsedRows.length} planos).`,
-        );
+      if (shouldAlert) {
+        setSheetAlerts((prev) => [
+          {
+            id: `alert_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+            title: latestCamp.name,
+            kind: 'campaign',
+            timeFormatted: timeNow,
+            unread: silent,
+          },
+          ...prev.slice(0, 19),
+        ]);
       }
 
-      return changed;
+      if (!silent) {
+        showToast(`"${latestCamp.name}" atualizada!`);
+      }
+
+      return true;
     },
     [showToast],
   );
 
+  // Silent internal sheet monitoring for channels (UOL, Logan, etc.)
+  const syncMonitoredChannels = useCallback(async () => {
+    const current = stateRef.current;
+    const folders: FolderKey[] = ['rides', 'food'];
+    const listKeys: Array<'internos' | 'externos'> = ['internos', 'externos'];
+
+    const targets: Array<{
+      folder: FolderKey;
+      listKey: 'internos' | 'externos';
+      index: number;
+      channel: KishiChannel;
+      sheetUrl: string;
+    }> = [];
+
+    for (const folder of folders) {
+      for (const listKey of listKeys) {
+        current.channels[folder][listKey].forEach((ch, idx) => {
+          if (!ch.watchChanges) return;
+          const targetUrl = (ch.monitorSheetUrl || ch.url || '').trim();
+          if (isGoogleSheetsUrl(targetUrl)) {
+            targets.push({
+              folder,
+              listKey,
+              index: idx,
+              channel: ch,
+              sheetUrl: targetUrl,
+            });
+          }
+        });
+      }
+    }
+
+    if (targets.length === 0) return;
+
+    for (const target of targets) {
+      const res = await syncGoogleSheetUrl(target.sheetUrl);
+      if (!res.ok || !res.csv) continue;
+
+      const nextHash = await hashNormalizedCsv(res.csv);
+      const latestChannel =
+        stateRef.current.channels[target.folder][target.listKey][target.index];
+      if (!latestChannel || latestChannel.name !== target.channel.name) continue;
+
+      const prevHash = latestChannel.lastCsvHash;
+      if (prevHash === nextHash) continue;
+
+      const timeNow = getFormattedTimeNow();
+      const todayBR = getFormattedToday();
+      const todayISO = getBrasiliaTodayISO();
+      const syncStamp = `${todayBR} às ${timeNow}`;
+      const isInitialBaseline = !prevHash;
+
+      setState((prev) => {
+        const list = prev.channels[target.folder][target.listKey];
+        const chItem = list[target.index];
+        if (!chItem || chItem.name !== target.channel.name) return prev;
+
+        const nextList = list.map((item, idx) =>
+          idx === target.index
+            ? { ...item, lastCsvHash: nextHash, lastSyncedAt: syncStamp }
+            : item,
+        );
+
+        let nextTasks = prev.tasks;
+        if (!isInitialBaseline) {
+          const expectedTitle = `Conferir plano atualizado: ${chItem.name}`;
+          const alreadyPendingToday = prev.tasks.some(
+            (t) =>
+              t.status !== 'concluido' &&
+              t.channelName.toLowerCase() === chItem.name.toLowerCase() &&
+              t.title === expectedTitle,
+          );
+          if (!alreadyPendingToday) {
+            const autoTask: KishiTask = {
+              id: `TK-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+              product: target.folder === 'food' ? '99 Food' : '99 Rides',
+              subBrand: target.folder === 'food' ? 'B-Side' : 'PAX',
+              channelType: chItem.type,
+              channelName: chItem.name,
+              title: expectedTitle,
+              status: 'afazer',
+              frequency: 'Pontual',
+              scheduledDate: todayISO,
+              tag: 'Conferência',
+              completedAt: null,
+              dateStr: todayBR,
+            };
+            nextTasks = [autoTask, ...prev.tasks];
+          }
+        }
+
+        const nextState: KishiState = {
+          ...prev,
+          channels: {
+            ...prev.channels,
+            [target.folder]: {
+              ...prev.channels[target.folder],
+              [target.listKey]: nextList,
+            },
+          },
+          tasks: nextTasks,
+        };
+
+        const currentUid = authUserRef.current?.uid;
+        void persistKishiState(nextState, currentUid);
+        if (currentUid && authUserRef.current?.emailVerified && cloudDocReadyRef.current) {
+          try {
+            lastCloudHashRef.current = JSON.stringify(normalizeKishiState(nextState));
+          } catch {
+            // ignore
+          }
+          void updateWorkspaceDoc(currentUid, nextState).catch((err) => {
+            console.error('Erro ao salvar atualização de canal na nuvem:', err);
+          });
+        }
+        return nextState;
+      });
+
+      if (!isInitialBaseline) {
+        setSheetAlerts((prev) => [
+          {
+            id: `ch_alert_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+            title: latestChannel.name,
+            kind: 'channel',
+            timeFormatted: timeNow,
+            unread: true,
+          },
+          ...prev.slice(0, 19),
+        ]);
+        showToast(
+          `O plano de ${latestChannel.name} está atualizado! Adicionado às Tarefas do Dia.`,
+        );
+      }
+    }
+  }, [showToast]);
+
   const syncAllLinkedCampaigns = useCallback(
     async (silent: boolean) => {
-      const linked = stateRef.current.activeCampaigns.filter((c) =>
-        Boolean(c.sheetUrl) && (!silent || c.autoSync !== false),
+      if (syncInFlightRef.current) return;
+      const linked = stateRef.current.activeCampaigns.filter(
+        (c) => Boolean(c.sheetUrl) && (!silent || c.autoSync !== false),
       );
-      if (linked.length === 0) return;
+      const hasWatchedChannels =
+        silent &&
+        (['rides', 'food'] as const).some((folder) =>
+          (['internos', 'externos'] as const).some((listKey) =>
+            stateRef.current.channels[folder][listKey].some((ch) => Boolean(ch.watchChanges)),
+          ),
+        );
 
+      if (linked.length === 0 && !hasWatchedChannels) return;
+
+      syncInFlightRef.current = true;
       lastAutoSyncAtRef.current = Date.now();
-      for (const camp of linked) {
-        await syncCampaignById(camp.id, silent);
+      try {
+        for (const camp of linked) {
+          await syncCampaignById(camp.id, silent);
+        }
+        if (hasWatchedChannels) {
+          await syncMonitoredChannels();
+        }
+      } finally {
+        syncInFlightRef.current = false;
       }
     },
-    [syncCampaignById],
+    [syncCampaignById, syncMonitoredChannels],
   );
 
   useEffect(() => {
     if (!isLoaded) return;
+    if (authUser && emailVerified && !cloudSyncedOnce) return;
 
-    // Initial background sync once state loads
+    // Initial background sync once workspace state is ready
     void syncAllLinkedCampaigns(true);
 
     // Sync automatically whenever user returns to this browser tab after editing Google Sheets
     const handleFocusOrVisible = () => {
       if (document.visibilityState === 'hidden') return;
-      if (Date.now() - lastAutoSyncAtRef.current < 4000) return;
+      if (Date.now() - lastAutoSyncAtRef.current < 8000) return;
       void syncAllLinkedCampaigns(true);
     };
 
-    // Background polling every 20s while tab is visible
+    // Background polling every 25s while tab is visible
     const pollTimer = window.setInterval(() => {
       if (document.visibilityState === 'visible') {
         void syncAllLinkedCampaigns(true);
       }
-    }, 20000);
+    }, 25000);
 
     window.addEventListener('focus', handleFocusOrVisible);
     document.addEventListener('visibilitychange', handleFocusOrVisible);
@@ -541,7 +856,7 @@ export default function App() {
       window.removeEventListener('focus', handleFocusOrVisible);
       document.removeEventListener('visibilitychange', handleFocusOrVisible);
     };
-  }, [isLoaded, syncAllLinkedCampaigns]);
+  }, [isLoaded, authUser, emailVerified, cloudSyncedOnce, syncAllLinkedCampaigns]);
 
   // Hash navigation listener
   useEffect(() => {
@@ -561,6 +876,9 @@ export default function App() {
       if (profileBoxRef.current && !profileBoxRef.current.contains(e.target as Node)) {
         setProfileMenuOpen(false);
       }
+      if (alertsBoxRef.current && !alertsBoxRef.current.contains(e.target as Node)) {
+        setAlertsMenuOpen(false);
+      }
     };
     document.addEventListener('mousedown', handleClickOutside);
     return () => document.removeEventListener('mousedown', handleClickOutside);
@@ -573,7 +891,7 @@ export default function App() {
 
   // Metrics
   const todayStr = getFormattedToday();
-  const remainingCount = state.tasks.filter((t) => t.status !== 'concluido').length;
+  const remainingCount = state.tasks.filter((t) => isTaskDueToday(t)).length;
   const doneTodayCount = state.history.filter((h) => h.dateStr === todayStr).length;
   const totalToday = remainingCount + doneTodayCount;
   const progressPct = totalToday > 0 ? Math.round((doneTodayCount / totalToday) * 100) : 0;
@@ -628,11 +946,14 @@ export default function App() {
     title: string;
     status: TaskStatus;
     frequency: TaskFrequency;
+    scheduledDate?: string;
+    monthlyDay?: number;
     tag?: string;
     estimatedMinutes?: number;
   }) {
     const nowTime = getFormattedTimeNow();
     const today = getFormattedToday();
+    const cleanChannelName = payload.channelType === 'Nenhum' ? '' : payload.channelName;
 
     if (payload.id) {
       commitState((prev) => {
@@ -647,10 +968,12 @@ export default function App() {
                 product: payload.product,
                 subBrand: payload.subBrand,
                 channelType: payload.channelType,
-                channelName: payload.channelName,
+                channelName: cleanChannelName,
                 title: payload.title,
                 status: payload.status,
                 frequency: payload.frequency,
+                scheduledDate: payload.scheduledDate,
+                monthlyDay: payload.monthlyDay,
                 tag: payload.tag,
                 estimatedMinutes: payload.estimatedMinutes,
                 completedAt:
@@ -668,7 +991,7 @@ export default function App() {
                 product: payload.product,
                 subBrand: payload.subBrand,
                 channelType: payload.channelType,
-                channelName: payload.channelName || 'Geral',
+                channelName: cleanChannelName || 'Geral',
                 frequency: payload.frequency,
                 time: nowTime,
               },
@@ -678,17 +1001,19 @@ export default function App() {
 
         return { ...prev, tasks: updatedTasks, history: nextHistory };
       });
-      showToast('Tarefa atualizada e salva no código!');
+      showToast('Tarefa atualizada!');
     } else {
       const newTask: KishiTask = {
         id: `TK-${Date.now()}`,
         product: payload.product,
         subBrand: payload.subBrand,
         channelType: payload.channelType,
-        channelName: payload.channelName,
+        channelName: cleanChannelName,
         title: payload.title,
         status: payload.status,
         frequency: payload.frequency,
+        scheduledDate: payload.scheduledDate,
+        monthlyDay: payload.monthlyDay,
         tag: payload.tag,
         estimatedMinutes: payload.estimatedMinutes,
         completedAt: payload.status === 'concluido' ? nowTime : null,
@@ -708,7 +1033,7 @@ export default function App() {
                   product: payload.product,
                   subBrand: payload.subBrand,
                   channelType: payload.channelType,
-                  channelName: payload.channelName || 'Geral',
+                  channelName: cleanChannelName || 'Geral',
                   frequency: payload.frequency,
                   time: nowTime,
                 },
@@ -716,7 +1041,7 @@ export default function App() {
               ]
             : prev.history,
       }));
-      showToast('Nova tarefa salva no código!');
+      showToast('Nova tarefa salva!');
     }
 
     setTaskModalOpen(false);
@@ -753,6 +1078,23 @@ export default function App() {
       };
     });
     showToast(`Tarefa concluída às ${nowTime}!`);
+  }
+
+  function handleToggleTaskDone(taskId: string) {
+    const task = state.tasks.find((t) => t.id === taskId);
+    if (!task) return;
+    if (task.status !== 'concluido') {
+      handleCompleteTask(taskId);
+      return;
+    }
+
+    commitState((prev) => ({
+      ...prev,
+      tasks: prev.tasks.map((t) =>
+        t.id === taskId ? { ...t, status: 'afazer', completedAt: null } : t,
+      ),
+    }));
+    showToast('Tarefa reaberta para fazer.');
   }
 
   function handleMoveTask(taskId: string, targetStatus: TaskStatus) {
@@ -917,6 +1259,8 @@ export default function App() {
     name: string;
     url: string;
     category: string;
+    color?: string;
+    obs?: string;
   }) {
     if (payload.id) {
       commitState((prev) => ({
@@ -928,11 +1272,13 @@ export default function App() {
                 name: payload.name,
                 url: payload.url,
                 category: payload.category,
+                color: payload.color,
+                obs: payload.obs,
               }
             : s,
         ),
       }));
-      showToast('Planilha atualizada no código!');
+      showToast('Planilha atualizada!');
     } else {
       commitState((prev) => ({
         ...prev,
@@ -944,14 +1290,39 @@ export default function App() {
             type: 'link',
             url: payload.url,
             note: 'Planilha / Link Salvo',
+            color: payload.color,
+            obs: payload.obs,
           },
           ...prev.sheets,
         ],
       }));
-      showToast('Link salvo no código!');
+      showToast('Link salvo!');
     }
     setSheetLinkModalOpen(false);
     setEditingSheet(null);
+  }
+
+  function handleUpdateSheetColorLabels(nextLabels: Record<string, string>) {
+    commitState((prev) => {
+      const currentBank: KishiTimeBank = prev.timeBank ?? {
+        workStart: '09:00',
+        workEnd: '18:00',
+        breakMinutes: 60,
+        extraBankMinutes: 0,
+        defaultTaskMinutes: 15,
+        defaultWaveMinutes: 0,
+        defaultTodoMinutes: 0,
+        timeRules: DEFAULT_TIME_RULES,
+      };
+      return {
+        ...prev,
+        timeBank: {
+          ...currentBank,
+          sheetColorLabels: Object.keys(nextLabels).length > 0 ? nextLabels : undefined,
+        },
+      };
+    });
+    showToast('Títulos das cores salvos!');
   }
 
   function handleRemoveSheet(sheetId: string) {
@@ -1015,29 +1386,6 @@ export default function App() {
     });
   }
 
-  function handleAddCommonTask(folder: FolderKey) {
-    setPromptDialog({
-      open: true,
-      title: 'Novo Afazer Comum',
-      label: `Afazer para 99 ${folder === 'rides' ? 'Rides' : 'Food'}:`,
-      placeholder: 'Ex: Conferir divergências na planilha semanal...',
-      onConfirm: (val) => {
-        commitState((prev) => ({
-          ...prev,
-          channels: {
-            ...prev.channels,
-            [folder]: {
-              ...prev.channels[folder],
-              common: [...prev.channels[folder].common, { title: val, done: false }],
-            },
-          },
-        }));
-        setPromptDialog((d) => ({ ...d, open: false }));
-        showToast('Afazer adicionado!');
-      },
-    });
-  }
-
   function handlePushCommonToToday(title: string, product: ProductType) {
     const newTask: KishiTask = {
       id: `TK-${Date.now()}`,
@@ -1063,6 +1411,8 @@ export default function App() {
     name: string;
     url: string;
     type: 'Interno' | 'Externo';
+    monitorSheetUrl?: string;
+    watchChanges?: boolean;
     editing: { listKey: 'internos' | 'externos'; index: number } | null;
   }) {
     const targetListKey = payload.type === 'Interno' ? 'internos' : 'externos';
@@ -1071,10 +1421,25 @@ export default function App() {
       const folderData = prev.channels[payload.folder];
       const nextInternos = [...folderData.internos];
       const nextExternos = [...folderData.externos];
+
+      const existingChannel = payload.editing
+        ? folderData[payload.editing.listKey][payload.editing.index]
+        : undefined;
+      const prevTargetUrl = (existingChannel?.monitorSheetUrl || existingChannel?.url || '').trim();
+      const nextTargetUrl = (payload.monitorSheetUrl || payload.url || '').trim();
+      const keepBaseline =
+        Boolean(payload.watchChanges) &&
+        Boolean(existingChannel?.watchChanges) &&
+        prevTargetUrl === nextTargetUrl;
+
       const newEntry: KishiChannel = {
         name: payload.name,
         url: payload.url,
         type: payload.type,
+        monitorSheetUrl: payload.monitorSheetUrl || undefined,
+        watchChanges: Boolean(payload.watchChanges),
+        lastCsvHash: keepBaseline ? existingChannel?.lastCsvHash : undefined,
+        lastSyncedAt: keepBaseline ? existingChannel?.lastSyncedAt : undefined,
       };
 
       if (payload.editing) {
@@ -1107,9 +1472,15 @@ export default function App() {
       };
     });
 
+    if (payload.watchChanges) {
+      window.setTimeout(() => {
+        void syncMonitoredChannels();
+      }, 250);
+    }
+
     setChannelModalOpen(false);
     setEditingChannel(null);
-    showToast(payload.editing ? 'Canal atualizado!' : 'Canal cadastrado no código!');
+    showToast(payload.editing ? 'Canal atualizado!' : 'Canal cadastrado!');
   }
 
   function handleDeleteChannel(
@@ -1438,6 +1809,7 @@ export default function App() {
       frequency:
         item.frequency === 'Diária' ||
         item.frequency === 'Semanal' ||
+        item.frequency === 'Mensal' ||
         item.frequency === 'Pontual'
           ? item.frequency
           : 'Diária',
@@ -1764,13 +2136,92 @@ export default function App() {
           )}
         </div>
 
-        {/* Ações direita: Perfil */}
+        {/* Ações direita: Alertas + Perfil */}
         <div className="flex items-center gap-2 shrink-0">
+          {/* Alertas de atualização de planilha */}
+          <div ref={alertsBoxRef} className="relative shrink-0">
+            <button
+              type="button"
+              onClick={() => {
+                setAlertsMenuOpen((prev) => {
+                  const nextOpen = !prev;
+                  if (nextOpen) {
+                    setSheetAlerts((items) =>
+                      items.map((a) => (a.unread ? { ...a, unread: false } : a)),
+                    );
+                  }
+                  return nextOpen;
+                });
+                setProfileMenuOpen(false);
+              }}
+              className="btn-press relative h-9 w-9 rounded-full bg-[#151d18] border border-[#777F89]/50 hover:border-[#C5A66B]/60 text-[#EDE9DE] flex items-center justify-center focus:outline-none cursor-pointer"
+              aria-label="Alertas de planilhas"
+              title="Atualizações de planilhas"
+            >
+              <Bell className="w-4 h-4 text-[#C5A66B]" />
+              {sheetAlerts.some((a) => a.unread) && (
+                <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-4 px-1 rounded-full bg-[#C5A66B] text-[#0f1512] text-[10px] font-extrabold flex items-center justify-center shadow">
+                  {sheetAlerts.filter((a) => a.unread).length}
+                </span>
+              )}
+            </button>
+
+            {alertsMenuOpen && (
+              <div className="absolute right-0 top-11 w-72 bg-[#151d18] border border-[#777F89]/60 rounded-2xl p-3 z-50 shadow-2xl space-y-2 text-xs">
+                <div className="flex items-center justify-between pb-2 border-b border-[#777F89]/40">
+                  <span className="font-bold text-[#EDE9DE]">Atualizações de Planilha</span>
+                  {sheetAlerts.length > 0 && (
+                    <button
+                      type="button"
+                      onClick={() => setSheetAlerts([])}
+                      className="text-[11px] text-[#A9B99D] hover:text-[#C5A66B] cursor-pointer"
+                    >
+                      Limpar
+                    </button>
+                  )}
+                </div>
+
+                {sheetAlerts.length === 0 ? (
+                  <p className="py-3 text-center text-[11px] text-[#A9B99D]">
+                    Nenhuma alteração recente nas planilhas.
+                  </p>
+                ) : (
+                  <div className="max-h-64 overflow-y-auto space-y-1.5 pr-0.5">
+                    {sheetAlerts.map((alert) => (
+                      <div
+                        key={alert.id}
+                        className="p-2 rounded-xl bg-[#0b100d] border border-[#777F89]/30 flex items-start gap-2"
+                      >
+                        <span className="text-[10px] font-mono font-bold text-[#C5A66B] shrink-0 mt-0.5">
+                          {alert.timeFormatted}
+                        </span>
+                        <span className="text-[11px] text-[#EDE9DE] leading-snug">
+                          {alert.kind === 'channel' ? (
+                            <>
+                              O plano de <strong className="text-[#C5A66B]">{alert.title}</strong> está atualizado — tarefa adicionada ao dia.
+                            </>
+                          ) : (
+                            <>
+                              Planilha <strong className="text-[#EDE9DE]">{alert.title}</strong> foi atualizada com alteração.
+                            </>
+                          )}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           {/* Perfil */}
           <div ref={profileBoxRef} className="relative shrink-0">
             <button
               type="button"
-              onClick={() => setProfileMenuOpen((v) => !v)}
+              onClick={() => {
+                setProfileMenuOpen((v) => !v);
+                setAlertsMenuOpen(false);
+              }}
               className="btn-press h-9 w-9 rounded-full bg-[#C5A66B] text-[#0f1512] font-extrabold text-sm flex items-center justify-center hover:bg-[#d5b880] shadow-md focus:outline-none border border-[#C5A66B]/30 cursor-pointer"
               aria-label="Menu do perfil"
             >
@@ -1839,6 +2290,17 @@ export default function App() {
               >
                 <History className="w-3.5 h-3.5 text-[#C5A66B]" />
                 <span>Histórico Permanente</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setProfileMenuOpen(false);
+                  setPrivacyModalOpen(true);
+                }}
+                className="w-full text-left p-2 rounded-lg hover:bg-[#1b251f] text-[#EDE9DE] flex items-center gap-2 cursor-pointer"
+              >
+                <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                <span>Segurança &amp; LGPD</span>
               </button>
               <button
                 type="button"
@@ -1943,6 +2405,7 @@ export default function App() {
               timeBank={resolvedTimeBank}
               onOpenNewTask={() => {
                 setEditingTask(null);
+                setTaskDefaultProduct('99 Rides');
                 setTaskModalOpen(true);
               }}
               onOpenEditTask={(task) => {
@@ -2016,11 +2479,24 @@ export default function App() {
               channels={state.channels}
               portals={state.portals}
               sheets={state.sheets}
+              tasks={state.tasks}
+              sheetColorLabels={resolvedTimeBank.sheetColorLabels}
               onSwitchTab={setActiveFolderTab}
+              onUpdateSheetColorLabels={handleUpdateSheetColorLabels}
               onToggleCommonTask={handleToggleCommonTask}
               onDeleteCommonTask={handleDeleteCommonTask}
-              onAddCommonTask={handleAddCommonTask}
               onPushCommonToToday={handlePushCommonToToday}
+              onOpenNewFrontTask={(product) => {
+                setEditingTask(null);
+                setTaskDefaultProduct(product);
+                setTaskModalOpen(true);
+              }}
+              onOpenEditTask={(task) => {
+                setEditingTask(task);
+                setTaskModalOpen(true);
+              }}
+              onToggleTaskDone={handleToggleTaskDone}
+              onDeleteLinkedTask={handleDeleteTask}
               onOpenNewChannel={(folder, defaultType) => {
                 setChannelModalFolder(folder);
                 setChannelModalDefaultType(defaultType);
@@ -2064,6 +2540,7 @@ export default function App() {
               tasks={state.tasks}
               onOpenNewTask={() => {
                 setEditingTask(null);
+                setTaskDefaultProduct('99 Rides');
                 setTaskModalOpen(true);
               }}
               onOpenEditTask={(task) => {
@@ -2129,6 +2606,7 @@ export default function App() {
       <TaskModal
         open={taskModalOpen}
         editingTask={editingTask}
+        defaultProduct={taskDefaultProduct}
         channels={state.channels}
         timeBank={resolvedTimeBank}
         onClose={() => {
@@ -2143,6 +2621,7 @@ export default function App() {
         folder={channelModalFolder}
         editing={editingChannel}
         defaultType={channelModalDefaultType}
+        workspaceState={state}
         onClose={() => {
           setChannelModalOpen(false);
           setEditingChannel(null);
@@ -2154,6 +2633,8 @@ export default function App() {
         open={sheetLinkModalOpen}
         editingSheet={editingSheet}
         defaultCategory={sheetDefaultCategory}
+        sheetColorLabels={resolvedTimeBank.sheetColorLabels}
+        workspaceState={state}
         onClose={() => {
           setSheetLinkModalOpen(false);
           setEditingSheet(null);
@@ -2165,6 +2646,7 @@ export default function App() {
         open={portalModalOpen}
         editingPortal={editingPortal}
         defaultCategory={portalDefaultCategory}
+        workspaceState={state}
         onClose={() => {
           setPortalModalOpen(false);
           setEditingPortal(null);
@@ -2176,6 +2658,7 @@ export default function App() {
         open={activeCampaignModalOpen}
         editingCampaign={editingActiveCampaign}
         defaultFront={activeCampaignDefaultFront}
+        workspaceState={state}
         onClose={() => {
           setActiveCampaignModalOpen(false);
           setEditingActiveCampaign(null);
@@ -2190,6 +2673,7 @@ export default function App() {
           'Campanha'
         }
         editingWave={waveModalState.editingWave}
+        workspaceState={state}
         onClose={() => setWaveModalState({ open: false, campaignId: '', editingWave: null })}
         onSave={handleSaveWavePlan}
       />
@@ -2199,6 +2683,27 @@ export default function App() {
         user={state.user}
         onClose={() => setProfileModalOpen(false)}
         onSave={handleSaveProfile}
+      />
+
+      <PrivacySecurityModal
+        open={privacyModalOpen}
+        userEmail={authUser?.email || 'Conta privada'}
+        autoLockEnabled={autoLockEnabled}
+        onToggleAutoLock={(next) => {
+          setAutoLockEnabled(next);
+          try {
+            localStorage.setItem('kishi_autolock_v1', String(next));
+          } catch {
+            // ignore
+          }
+          showToast(
+            next
+              ? 'Bloqueio automático (30 min) ativado.'
+              : 'Bloqueio automático desativado.',
+          );
+        }}
+        onLockAndSignOut={() => void handleDisconnectCloud()}
+        onClose={() => setPrivacyModalOpen(false)}
       />
 
       <HoursSettingsModal

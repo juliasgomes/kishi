@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import type { KishiTask, TaskStatus } from '@/src/types/kishi';
 import { getChannelColor, getFrontStyle } from '@/src/utils/channelColors';
+import { getTaskScheduleLabel } from '@/src/utils/taskSchedule';
 
 interface KanbanModuleProps {
   tasks: KishiTask[];
@@ -168,7 +169,7 @@ export function KanbanModule({
                             {isRides && <Car className="w-3 h-3 shrink-0" />}
                             {isFood && <UtensilsCrossed className="w-3 h-3 shrink-0" />}
                             <span>
-                              {task.product} · {task.frequency}
+                              {task.product} · {getTaskScheduleLabel(task)}
                             </span>
                           </span>
                           <button
@@ -189,14 +190,21 @@ export function KanbanModule({
                           {task.title}
                         </h5>
 
-                        {task.channelName && (
-                          <div
-                            className={`text-[11px] font-mono font-semibold flex items-center gap-1 ${
-                              getChannelColor(task.channelName).textClass
-                            }`}
-                          >
-                            <LinkIcon className="w-3 h-3 shrink-0" />
-                            <span className="truncate">{task.channelName}</span>
+                        {(task.channelName || task.tag) && (
+                          <div className="flex flex-wrap items-center gap-2 text-[11px] font-mono">
+                            {task.channelName && (
+                              <span
+                                className={`font-semibold flex items-center gap-1 ${
+                                  getChannelColor(task.channelName).textClass
+                                }`}
+                              >
+                                <LinkIcon className="w-3 h-3 shrink-0" />
+                                <span className="truncate">{task.channelName}</span>
+                              </span>
+                            )}
+                            {task.tag && (
+                              <span className="text-[#C5A66B] font-semibold">#{task.tag}</span>
+                            )}
                           </div>
                         )}
 
