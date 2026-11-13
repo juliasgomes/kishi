@@ -3,8 +3,6 @@ import {
   Calendar,
   CheckCircle2,
   Clock,
-  Cloud,
-  CloudOff,
   Download,
   FolderTree,
   Globe,
@@ -207,9 +205,6 @@ export default function App() {
   const [authUser, setAuthUser] = useState<User | null>(null);
   const [authReady, setAuthReady] = useState(false);
   const [emailVerified, setEmailVerified] = useState(false);
-  const [cloudStatus, setCloudStatus] = useState<'disconnected' | 'syncing' | 'synced' | 'error'>(
-    'disconnected',
-  );
   const authUserRef = useRef<User | null>(null);
   const cloudDocReadyRef = useRef(false);
   const lastCloudHashRef = useRef('');
@@ -234,7 +229,6 @@ export default function App() {
           }
           void updateWorkspaceDoc(currentUid, next).catch((err) => {
             console.error('Erro ao sincronizar alteração na nuvem:', err);
-            setCloudStatus('error');
           });
         }
         return next;
@@ -318,7 +312,6 @@ export default function App() {
       if (!user) {
         cloudDocReadyRef.current = false;
         lastCloudHashRef.current = '';
-        setCloudStatus('disconnected');
       }
     });
     return () => unsubAuth();
@@ -328,11 +321,9 @@ export default function App() {
   useEffect(() => {
     if (!authReady || !authUser || !emailVerified || !isLoaded) return;
 
-    setCloudStatus('syncing');
     const unsubDoc = subscribeWorkspaceDoc(authUser.uid, {
       onRemoteData: (remoteState, hasPendingWrites) => {
         cloudDocReadyRef.current = true;
-        setCloudStatus('synced');
         const { next, rolledOver } = applyDayRollover(remoteState);
         let nextHash = '';
         try {
@@ -350,20 +341,16 @@ export default function App() {
         }
       },
       onMissingDoc: () => {
-        setCloudStatus('syncing');
         void createWorkspaceDoc(authUser.uid, stateRef.current)
           .then(() => {
             cloudDocReadyRef.current = true;
-            setCloudStatus('synced');
           })
           .catch((err) => {
             console.error('Erro ao criar workspace inicial na nuvem:', err);
-            setCloudStatus('error');
           });
       },
       onError: (err) => {
         console.error('Erro na sincronização em tempo real:', err);
-        setCloudStatus('error');
       },
     });
 
@@ -1616,11 +1603,11 @@ export default function App() {
 
   if (!authReady) {
     return (
-      <div className="min-h-screen bg-[#0f1512] text-[#EDE9DE] flex flex-col items-center justify-center gap-3 p-6">
-        <div className="h-12 w-12 rounded-2xl bg-[#0b100d] border border-[#C5A66B]/45 flex items-center justify-center">
-          <KishiLogoSvg className="h-7 w-7 text-[#C5A66B] animate-pulse" />
+      <div className="min-h-screen bg-[#0f1512] text-[#EDE9DE] flex flex-col items-center justify-center gap-5 p-6">
+        <div className="h-28 w-28 sm:h-32 sm:w-32 rounded-3xl bg-[#0b100d] border border-[#C5A66B]/45 flex items-center justify-center shadow-2xl">
+          <KishiLogoSvg className="h-20 w-20 sm:h-24 sm:w-24 text-[#C5A66B] animate-pulse" />
         </div>
-        <span className="font-extrabold text-sm tracking-[0.25em] text-[#EDE9DE] font-['Montserrat',sans-serif]">
+        <span className="font-extrabold text-xl sm:text-2xl tracking-[0.28em] text-[#EDE9DE] font-['Montserrat',sans-serif]">
           KISHI
         </span>
       </div>
@@ -1777,35 +1764,9 @@ export default function App() {
           )}
         </div>
 
-        {/* Ações direita: Instalar PWA + Sync Nuvem + Perfil */}
+        {/* Ações direita: Instalar PWA + Perfil */}
         <div className="flex items-center gap-2 shrink-0">
           <PWAInstallButton compact />
-
-          {authUser && (
-            <button
-              type="button"
-              onClick={() => setProfileMenuOpen((v) => !v)}
-              className="hidden sm:flex items-center gap-1.5 px-2 py-1 rounded-lg bg-[#151d18] border border-[#777F89]/35 text-[10px] font-mono text-[#A9B99D] cursor-pointer"
-              title={
-                cloudStatus === 'synced'
-                  ? `Sincronizado em tempo real (${authUser.email || 'Conta privada'})`
-                  : cloudStatus === 'error'
-                    ? 'Erro ao sincronizar na nuvem'
-                    : 'Sincronizando...'
-              }
-            >
-              {cloudStatus === 'error' ? (
-                <CloudOff className="w-3 h-3 text-rose-400" />
-              ) : (
-                <Cloud
-                  className={`w-3 h-3 ${
-                    cloudStatus === 'synced' ? 'text-emerald-400' : 'text-[#C5A66B] animate-pulse'
-                  }`}
-                />
-              )}
-              <span>{cloudStatus === 'synced' ? 'Sincronizado' : cloudStatus === 'error' ? 'Erro sync' : 'Sync...'}</span>
-            </button>
-          )}
 
           {/* Perfil */}
           <div ref={profileBoxRef} className="relative shrink-0">

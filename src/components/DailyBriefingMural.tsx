@@ -195,23 +195,21 @@ export function DailyBriefingMural({
 
     if (workStats.status === 'before') {
       parts.push(
-        `Agora são ${workStats.brasiliaTimeFormatted} (Brasília). Seu expediente começa às ${timeBank.workStart} (${formatDuration(
+        `Agora são ${workStats.brasiliaTimeFormatted}. Seu expediente começa às ${timeBank.workStart} (${formatDuration(
           workStats.totalAvailableMinutes,
         )} disponíveis hoje).`,
       );
     } else if (workStats.status === 'after') {
       parts.push(
-        `Agora são ${workStats.brasiliaTimeFormatted} (Brasília). Expediente encerrado às ${timeBank.workEnd} (${formatDuration(
-          workStats.workedMinutes,
-        )} cumpridas hoje${
+        `Agora são ${workStats.brasiliaTimeFormatted}. Expediente encerrado às ${timeBank.workEnd}${
           timeBank.extraBankMinutes !== 0
-            ? `, saldo extra de ${formatDuration(timeBank.extraBankMinutes)}`
+            ? ` (saldo extra de ${formatDuration(timeBank.extraBankMinutes)})`
             : ''
-        }).`,
+        }.`,
       );
     } else {
       parts.push(
-        `Agora são ${workStats.brasiliaTimeFormatted} (Brasília): você está há ${formatDuration(
+        `Agora são ${workStats.brasiliaTimeFormatted}: você está há ${formatDuration(
           workStats.workedMinutes,
         )} no trabalho e ainda tem ${formatDuration(
           workStats.totalAvailableMinutes,
