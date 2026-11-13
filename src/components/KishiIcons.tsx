@@ -109,3 +109,116 @@ export function ChatDotAntSvg({ className = 'w-4 h-4 text-[#C5A66B]' }: { classN
     </svg>
   );
 }
+
+/**
+ * Formiga anatômica realista (vista superior) em escala minúscula.
+ * As classes `ant-tripod-a` / `ant-tripod-b` animam apenas quando envoltas por `.ant-walking`.
+ */
+export function RealisticMicroAntSvg({
+  className = 'w-3.5 h-3.5 text-[#1b1610]',
+  walking = false,
+}: {
+  className?: string;
+  walking?: boolean;
+}) {
+  return (
+    <svg
+      className={`${className} ${walking ? 'ant-walking' : ''}`}
+      viewBox="0 0 36 28"
+      fill="none"
+      aria-hidden="true"
+    >
+      {/* Grupo tripé A (pata frontal esq, média dir, traseira esq) */}
+      <g className="ant-tripod-a" stroke="currentColor" strokeWidth="1.15" strokeLinecap="round" strokeLinejoin="round">
+        {/* Frontal esquerda */}
+        <path d="M21 12.2 L24.5 7.2 L28.2 5.4" />
+        {/* Média direita */}
+        <path d="M18.2 15.6 L19.4 20.6 L21.4 24.4" />
+        {/* Traseira esquerda */}
+        <path d="M15.4 12.6 L11.4 7.6 L6.8 5.2" />
+      </g>
+
+      {/* Grupo tripé B (pata frontal dir, média esq, traseira dir) */}
+      <g className="ant-tripod-b" stroke="currentColor" strokeWidth="1.15" strokeLinecap="round" strokeLinejoin="round">
+        {/* Frontal direita */}
+        <path d="M21 15.8 L24.5 20.8 L28.2 22.6" />
+        {/* Média esquerda */}
+        <path d="M18.2 12.4 L19.4 7.4 L21.4 3.6" />
+        {/* Traseira direita */}
+        <path d="M15.4 15.4 L11.4 20.4 L6.8 22.8" />
+      </g>
+
+      {/* Antenas geniculadas (escapo + funículo dobrado realista) */}
+      <path
+        d="M27.4 12.4 L30.8 9.2 L34.2 9.4"
+        stroke="currentColor"
+        strokeWidth="1.05"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M27.4 15.6 L30.8 18.8 L34.2 18.6"
+        stroke="currentColor"
+        strokeWidth="1.05"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+
+      {/* Mandíbulas curtas */}
+      <path
+        d="M28.1 13.3 L29.7 13.8 M28.1 14.7 L29.7 14.2"
+        stroke="currentColor"
+        strokeWidth="1.1"
+        strokeLinecap="round"
+      />
+
+      {/* Gáster (abdômen segmentado real) */}
+      <ellipse cx="7.4" cy="14" rx="5.1" ry="3.5" fill="currentColor" />
+      <path
+        d="M5.4 11.2 C6.1 13.1 6.1 14.9 5.4 16.8 M8.1 10.7 C8.8 12.9 8.8 15.1 8.1 17.3"
+        stroke="#C5A66B"
+        strokeOpacity="0.32"
+        strokeWidth="0.7"
+        strokeLinecap="round"
+      />
+
+      {/* Pecíolo fino (cintura) */}
+      <ellipse cx="13.4" cy="14" rx="1.35" ry="0.95" fill="currentColor" />
+
+      {/* Mesossoma / Tórax */}
+      <ellipse cx="18.3" cy="14" rx="3.7" ry="2.15" fill="currentColor" />
+
+      {/* Cápsula cefálica */}
+      <ellipse cx="24.8" cy="14" rx="3.1" ry="2.55" fill="currentColor" />
+
+      {/* Olhos compostos sutis */}
+      <circle cx="25.6" cy="12.3" r="0.55" fill="#C5A66B" fillOpacity="0.45" />
+      <circle cx="25.6" cy="15.7" r="0.55" fill="#C5A66B" fillOpacity="0.45" />
+    </svg>
+  );
+}
+
+/**
+ * Inscrição cuneiforme suméria discreta (𒆧 = Kiši "formiga", 𒁾 = Dub "tábua/planilha",
+ * 𒌓 = Ud "dia", 𒋗 = Šu "tarefa/mão", 𒆠 = Ki "lugar").
+ */
+export function SumerianGlyphWhisper({
+  glyphs = '𒆧  𒁾  𒌓',
+  className = '',
+  title,
+}: {
+  glyphs?: string;
+  className?: string;
+  title?: string;
+}) {
+  return (
+    <span
+      aria-hidden={!title}
+      title={title}
+      className={`select-none pointer-events-none tracking-[0.22em] text-[#C5A66B]/30 font-serif leading-none ${className}`}
+    >
+      {glyphs}
+    </span>
+  );
+}
+

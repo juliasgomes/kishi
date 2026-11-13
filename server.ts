@@ -47,6 +47,73 @@ async function startServer() {
     res.json({ ok: true });
   });
 
+  function parseContentDispositionTitle(header: string | null): string | undefined {
+    if (!header) return undefined;
+    const utf8Match = header.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+    let raw = utf8Match?.[1];
+    if (raw) {
+      try {
+        raw = decodeURIComponent(raw);
+      } catch {
+        // keep raw
+      }
+    } else {
+      const asciiMatch = header.match(/filename\s*=\s*"([^"]+)"/i) || header.match(/filename\s*=\s*([^;]+)/i);
+      raw = asciiMatch?.[1]?.trim();
+    }
+    if (!raw) return undefined;
+    const cleaned = raw.replace(/\.(csv|tsv|xlsx|xls|docx|doc|pptx|ppt|pdf)$/i, '').trim();
+    return cleaned || undefined;
+  }
+
+  function decodeHtmlEntities(input: string): string {
+    return input
+      .replace(/&amp;/g, '&')
+      .replace(/&quot;/g, '"')
+      .replace(/&#39;|&apos;/g, "'")
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .trim();
+  }
+
+  function cleanGoogleHtmlTitle(rawTitle: string): string | undefined {
+    const decoded = decodeHtmlEntities(rawTitle)
+      .replace(/\s*[-–—]\s*Google\s+(Sheets|Planilhas|Docs|Documentos|Slides|Apresenta[çc][õo]es|Drive)\s*$/i, '')
+      .trim();
+    const low = decoded.toLowerCase();
+    if (
+      !decoded ||
+      low === 'google docs' ||
+      low === 'google sheets' ||
+      low === 'google slides' ||
+      low === 'google drive' ||
+      low.includes('sign-in') ||
+      low.includes('sign in') ||
+      low.includes('fazer login') ||
+      low.includes('acesso negado') ||
+      low.includes('solicitar acesso')
+    ) {
+      return undefined;
+    }
+    return decoded;
+  }
+
+  function detectCategoryHint(...samples: Array<string | undefined>): '99' | '99 Rides' | '99 Food' | undefined {
+    const combined = samples
+      .filter(Boolean)
+      .join(' ')
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .toLowerCase();
+    if (!combined) return undefined;
+    const hasFood = /\b(99\s*food|99food|food|b-?side|c-?side|d-?side|restaurante|delivery)\b/.test(combined);
+    const hasRides = /\b(99\s*rides|99rides|rides|ride|pax|drv|driver|corrida|corridas|motorista|passageiro)\b/.test(combined);
+    if (hasFood && hasRides) return '99';
+    if (hasFood) return '99 Food';
+    if (hasRides) return '99 Rides';
+    return undefined;
+  }
+
   app.post('/api/sync-google-sheet', async (req, res) => {
     try {
       const { url } = req.body as { url?: string };
@@ -105,6 +172,7 @@ async function startServer() {
 
       const contentType = response.headers.get('content-type') || '';
       const finalUrl = response.url || '';
+      const docTitle = parseContentDispositionTitle(response.headers.get('content-disposition'));
       const bodyText = await response.text();
 
       if (
@@ -123,13 +191,126 @@ async function startServer() {
         return;
       }
 
-      res.json({ ok: true, csv: bodyText });
+      res.json({ ok: true, csv: bodyText, docTitle });
     } catch (error) {
       console.error('Erro ao sincronizar Google Sheet:', error);
       res.status(500).json({
         ok: false,
         error: 'Não foi possível conectar ao Google Sheets agora. Use a opção de colar (Ctrl+V).',
       });
+    }
+  });
+
+  app.post('/api/inspect-google-link', async (req, res) => {
+    try {
+      const { url } = req.body as { url?: string };
+      if (!url || typeof url !== 'string' || url.length > 2048) {
+        res.status(400).json({ ok: false, error: 'URL inválida.' });
+        return;
+      }
+
+      let parsedUrl: URL;
+      try {
+        parsedUrl = new URL(url.trim());
+      } catch {
+        res.status(400).json({ ok: false, error: 'Formato de URL inválido.' });
+        return;
+      }
+
+      if (
+        parsedUrl.protocol !== 'https:' ||
+        (parsedUrl.hostname !== 'docs.google.com' && parsedUrl.hostname !== 'drive.google.com')
+      ) {
+        res.status(400).json({ ok: false, error: 'URL fora do Google Drive/Docs.' });
+        return;
+      }
+
+      const lower = parsedUrl.href.toLowerCase();
+      const resourceKind = lower.includes('/presentation')
+        ? 'apresentacao'
+        : lower.includes('/document')
+          ? 'doc'
+          : parsedUrl.hostname === 'drive.google.com'
+            ? 'drive'
+            : 'planilha';
+
+      let title: string | undefined;
+      let csvSample = '';
+      let requiresAuth = false;
+
+      if (resourceKind === 'planilha') {
+        const pubMatch = parsedUrl.pathname.match(/\/spreadsheets\/d\/e\/([a-zA-Z0-9-_]+)/);
+        const idMatch = parsedUrl.pathname.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+        const hashGidMatch = parsedUrl.hash.match(/gid=(\d+)/);
+        const gid = parsedUrl.searchParams.get('gid') || hashGidMatch?.[1] || '';
+
+        if (pubMatch || idMatch) {
+          const exportUrl = pubMatch
+            ? `https://docs.google.com/spreadsheets/d/e/${pubMatch[1]}/pub?output=csv${
+                gid ? `&gid=${gid}&single=true` : ''
+              }&_t=${Date.now()}`
+            : `https://docs.google.com/spreadsheets/d/${idMatch![1]}/export?format=csv${
+                gid ? `&gid=${gid}` : ''
+              }&_t=${Date.now()}`;
+
+          try {
+            const resp = await fetch(exportUrl, {
+              redirect: 'follow',
+              cache: 'no-store',
+              signal: AbortSignal.timeout(8000),
+              headers: { 'User-Agent': 'Mozilla/5.0 (compatible; KishiSync/1.0)' },
+            });
+            const ct = resp.headers.get('content-type') || '';
+            const finalU = resp.url || '';
+            title = parseContentDispositionTitle(resp.headers.get('content-disposition'));
+            const text = await resp.text();
+            if (resp.ok && !finalU.includes('accounts.google.com') && !ct.includes('text/html')) {
+              csvSample = text.split('\n').slice(0, 6).join(' ');
+            } else {
+              requiresAuth = true;
+            }
+          } catch {
+            // fallback to HTML title lookup below
+          }
+        }
+      }
+
+      if (!title) {
+        try {
+          const htmlResp = await fetch(parsedUrl.href, {
+            redirect: 'follow',
+            cache: 'no-store',
+            signal: AbortSignal.timeout(7000),
+            headers: {
+              'User-Agent': 'Mozilla/5.0 (compatible; KishiSync/1.0)',
+              'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8',
+            },
+          });
+          const html = await htmlResp.text();
+          if (htmlResp.url.includes('accounts.google.com')) {
+            requiresAuth = true;
+          } else {
+            const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
+            if (titleMatch?.[1]) {
+              title = cleanGoogleHtmlTitle(titleMatch[1]);
+            }
+          }
+        } catch {
+          // ignore metadata fetch timeout
+        }
+      }
+
+      const category = detectCategoryHint(title, csvSample);
+      res.json({
+        ok: true,
+        title,
+        resourceKind,
+        category,
+        requiresAuth: !title && requiresAuth,
+      });
+    } catch (error) {
+      console.error('Erro ao inspecionar link do Google:', error);
+      res.status(500).json({ ok: false, error: 'Falha ao consultar metadados do link.' });
     }
   });
 

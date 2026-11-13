@@ -21,10 +21,15 @@ import type {
   KishiTask,
   KishiTimeBank,
 } from '@/src/types/kishi';
+import { triggerAntScurry } from '@/src/components/AntTrailOverlay';
 import { AnalyticsCharts } from '@/src/components/AnalyticsCharts';
 import { DailyBriefingMural } from '@/src/components/DailyBriefingMural';
 import { getChannelColor, getFrontStyle } from '@/src/utils/channelColors';
-import { getTaskScheduleLabel, isTaskDueToday } from '@/src/utils/taskSchedule';
+import {
+  getTaskScheduleLabel,
+  isTaskDueToday,
+  isTaskOverdue,
+} from '@/src/utils/taskSchedule';
 
 interface OverviewModuleProps {
   userName: string;
@@ -274,39 +279,45 @@ export function OverviewModule({
       />
 
       {/* KPIs */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div className="interactive-card bg-[#151d18] border border-[#777F89]/40 rounded-2xl p-4 flex items-center justify-between">
-          <div>
-            <span className="text-[11px] font-semibold text-[#A9B99D]">Restam Fazer</span>
-            <div className="text-2xl font-extrabold text-[#EDE9DE] mt-0.5 tabular-nums font-mono">
+      <div className="grid grid-cols-3 gap-2 sm:gap-4">
+        <div className="interactive-card bg-[#151d18] border border-[#777F89]/40 rounded-2xl p-3 sm:p-4 flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <span className="text-[10px] sm:text-[11px] font-semibold text-[#A9B99D] block truncate">
+              Restam Fazer
+            </span>
+            <div className="text-lg sm:text-2xl font-extrabold text-[#EDE9DE] mt-0.5 tabular-nums font-mono">
               {pendingTasks.length}
             </div>
           </div>
-          <div className="h-10 w-10 rounded-xl bg-[#0f1512] flex items-center justify-center text-[#A9B99D]">
+          <div className="hidden sm:flex h-10 w-10 rounded-xl bg-[#0f1512] items-center justify-center text-[#A9B99D] shrink-0">
             <ListChecks className="w-4 h-4" />
           </div>
         </div>
 
-        <div className="interactive-card bg-[#151d18] border border-[#777F89]/40 rounded-2xl p-4 flex items-center justify-between">
-          <div>
-            <span className="text-[11px] font-semibold text-[#A9B99D]">Em Andamento</span>
-            <div className="text-2xl font-extrabold text-[#C5A66B] mt-0.5 tabular-nums font-mono">
+        <div className="interactive-card bg-[#151d18] border border-[#777F89]/40 rounded-2xl p-3 sm:p-4 flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <span className="text-[10px] sm:text-[11px] font-semibold text-[#A9B99D] block truncate">
+              Andamento
+            </span>
+            <div className="text-lg sm:text-2xl font-extrabold text-[#C5A66B] mt-0.5 tabular-nums font-mono">
               {inProgressCount}
             </div>
           </div>
-          <div className="h-10 w-10 rounded-xl bg-[#0f1512] flex items-center justify-center text-[#C5A66B]">
+          <div className="hidden sm:flex h-10 w-10 rounded-xl bg-[#0f1512] items-center justify-center text-[#C5A66B] shrink-0">
             <Clock className="w-4 h-4" />
           </div>
         </div>
 
-        <div className="interactive-card bg-[#151d18] border border-[#777F89]/40 rounded-2xl p-4 flex items-center justify-between">
-          <div>
-            <span className="text-[11px] font-semibold text-[#A9B99D]">Concluídas Hoje</span>
-            <div className="text-2xl font-extrabold text-[#A9B99D] mt-0.5 tabular-nums font-mono">
+        <div className="interactive-card bg-[#151d18] border border-[#777F89]/40 rounded-2xl p-3 sm:p-4 flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <span className="text-[10px] sm:text-[11px] font-semibold text-[#A9B99D] block truncate">
+              Feitas Hoje
+            </span>
+            <div className="text-lg sm:text-2xl font-extrabold text-[#A9B99D] mt-0.5 tabular-nums font-mono">
               {doneTodayCount}
             </div>
           </div>
-          <div className="h-10 w-10 rounded-xl bg-[#0f1512] flex items-center justify-center text-[#A9B99D]">
+          <div className="hidden sm:flex h-10 w-10 rounded-xl bg-[#0f1512] items-center justify-center text-[#A9B99D] shrink-0">
             <CheckCircle2 className="w-4 h-4" />
           </div>
         </div>
@@ -354,17 +365,24 @@ export function OverviewModule({
                     ? 'Rotina'
                     : 'A Fazer';
 
+              const overdue = isTaskOverdue(task);
               return (
                 <div
                   key={task.id}
                   onClick={() => onGoToFolder(targetFolder, task.channelName)}
-                  className="interactive-card p-3.5 rounded-xl bg-[#0f1512]/70 border border-[#777F89]/40 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3 cursor-pointer"
+                  className={`interactive-card p-3 sm:p-3.5 rounded-xl bg-[#0f1512]/70 border flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 sm:gap-3 cursor-pointer ${
+                    overdue ? 'border-rose-500/45' : 'border-[#777F89]/40'
+                  }`}
                 >
                   <div className="flex items-start sm:items-center gap-3 min-w-0">
                     <input
                       type="checkbox"
                       checked={false}
-                      onClick={(e) => e.stopPropagation()}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        const rect = e.currentTarget.getBoundingClientRect();
+                        triggerAntScurry(rect.left + rect.width / 2, rect.top + rect.height / 2, 2);
+                      }}
                       onChange={() => onCompleteTask(task.id)}
                       className="h-4 w-4 mt-0.5 sm:mt-0 rounded bg-[#0b100d] border-[#777F89]/60 accent-[#C5A66B] cursor-pointer shrink-0"
                       title="Marcar como concluída"
@@ -394,7 +412,10 @@ export function OverviewModule({
                           </>
                         )}
                         <span aria-hidden="true">·</span>
-                        <span>{getTaskScheduleLabel(task)}</span>
+                        <span className={overdue ? 'text-rose-300 font-semibold' : ''}>
+                          {getTaskScheduleLabel(task)}
+                          {overdue ? ' (Atrasada)' : ''}
+                        </span>
                         {task.tag && (
                           <>
                             <span aria-hidden="true">·</span>

@@ -42,15 +42,26 @@ export interface KishiUser {
   role: string;
 }
 
+export type SheetResourceKind =
+  | 'planilha'
+  | 'drive'
+  | 'doc'
+  | 'apresentacao'
+  | 'arquivo';
+
 export interface KishiSheet {
   id: string;
   name: string;
   category: string;
   type: 'link' | 'file';
+  resourceKind?: SheetResourceKind;
   url: string;
   note: string;
   color?: string;
   obs?: string;
+  autoSyncMeta?: boolean;
+  lastSheetTitle?: string;
+  lastSyncedAt?: string;
 }
 
 export interface KishiPortal {
@@ -74,6 +85,7 @@ export interface KishiChannel {
   watchChanges?: boolean;
   lastCsvHash?: string;
   lastSyncedAt?: string;
+  lastVerifiedAt?: string;
 }
 
 export interface KishiMediaRevision {
@@ -132,6 +144,7 @@ export interface KishiActiveCampaign {
   sheetUrl?: string;
   autoSync?: boolean;
   lastSyncedAt?: string;
+  lastSheetTitle?: string;
   notes?: string;
   waves: KishiWavePlan[];
   todos: KishiCampaignTodo[];
@@ -156,6 +169,7 @@ export interface KishiTask {
 
 export interface KishiHistoryItem {
   id: string;
+  taskId?: string;
   dateStr: string;
   title: string;
   product: ProductType | string;

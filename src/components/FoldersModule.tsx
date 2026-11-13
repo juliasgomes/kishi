@@ -7,6 +7,8 @@ import {
   Check,
   ExternalLink,
   FileSpreadsheet,
+  FileText,
+  FolderOpen,
   Globe,
   LayoutGrid,
   Link as LinkIcon,
@@ -15,12 +17,14 @@ import {
   Palette,
   Pencil,
   Plus,
+  Presentation,
   Share2,
   Table2,
   Trash2,
   UploadCloud,
   UtensilsCrossed,
 } from 'lucide-react';
+import { SumerianGlyphWhisper } from '@/src/components/KishiIcons';
 import type {
   FolderKey,
   FolderTab,
@@ -30,8 +34,14 @@ import type {
   KishiState,
   KishiTask,
   ProductType,
+  SheetResourceKind,
 } from '@/src/types/kishi';
 import { getChannelColor, getFrontStyle } from '@/src/utils/channelColors';
+import {
+  detectResourceKind,
+  getResourceKindMeta,
+  LINK_RESOURCE_KINDS,
+} from '@/src/utils/resourceKind';
 import {
   getSheetColorLabel,
   getSheetColorMeta,
@@ -103,6 +113,22 @@ function renderFrontIcon(
   return <ExternalLink className="w-4 h-4" />;
 }
 
+function renderResourceKindIcon(kind: SheetResourceKind) {
+  switch (kind) {
+    case 'drive':
+      return <FolderOpen className="w-4 h-4" />;
+    case 'doc':
+      return <FileText className="w-4 h-4" />;
+    case 'apresentacao':
+      return <Presentation className="w-4 h-4" />;
+    case 'arquivo':
+      return <FileSpreadsheet className="w-4 h-4" />;
+    case 'planilha':
+    default:
+      return <Table2 className="w-4 h-4" />;
+  }
+}
+
 export function FoldersModule({
   activeTab,
   channels,
@@ -131,6 +157,7 @@ export function FoldersModule({
   onRemoveSheet,
 }: FoldersModuleProps) {
   const [sheetColorFilter, setSheetColorFilter] = useState<string>('all');
+  const [sheetKindFilter, setSheetKindFilter] = useState<'all' | SheetResourceKind>('all');
   const [editingColorsOpen, setEditingColorsOpen] = useState(false);
   const [draftColorLabels, setDraftColorLabels] = useState<Record<string, string>>({});
   const [todoFilterMode, setTodoFilterMode] = useState<'today' | 'date' | 'all'>('today');
@@ -181,7 +208,7 @@ export function FoldersModule({
     }
 
     return (
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 auto-rows-fr">
         {items.map((portal) => {
           const front = getFrontStyle(portal.category);
           const isBoth99 = portal.category === '99';
@@ -191,49 +218,58 @@ export function FoldersModule({
               href={portal.url}
               target="_blank"
               rel="noopener noreferrer"
-              className={`interactive-card group p-3.5 rounded-xl bg-[#0f1512]/80 border border-[#777F89]/40 ${front.cardBorderClass} flex items-start justify-between gap-3 focus:outline-none`}
+              className={`interactive-card group h-full p-3.5 rounded-xl bg-[#0f1512]/80 border border-[#777F89]/40 ${front.cardBorderClass} flex flex-col justify-between gap-2.5 focus:outline-none`}
             >
-              <div className="flex items-start gap-3 min-w-0 flex-1">
-                <div
-                  className={`h-9 ${isBoth99 ? 'px-2' : 'w-9'} rounded-lg flex items-center justify-center shrink-0 mt-0.5 ${front.iconBgClass}`}
-                >
-                  {renderFrontIcon(portal.category, portal.kind === 'App' ? 'app' : 'portal')}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <h4 className="text-sm font-bold text-[#EDE9DE] group-hover:text-[#C5A66B] transition-colors break-words leading-snug">
+              <div className="flex items-start justify-between gap-2.5">
+                <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                  <div
+                    className={`h-8 ${isBoth99 ? 'px-2' : 'w-8'} rounded-lg flex items-center justify-center shrink-0 ${front.iconBgClass}`}
+                  >
+                    {renderFrontIcon(portal.category, portal.kind === 'App' ? 'app' : 'portal')}
+                  </div>
+                  <h4
+                    title={portal.name}
+                    className="text-[13px] font-bold text-[#EDE9DE] group-hover:text-[#C5A66B] transition-colors leading-snug line-clamp-2 break-words pt-0.5"
+                  >
                     {portal.name}
                   </h4>
-                  <p className="text-[11px] text-[#A9B99D] mt-0.5">
-                    {portal.kind} · {isBoth99 ? '99' : front.label}
-                  </p>
+                </div>
+
+                <div
+                  className="flex items-center gap-1 shrink-0"
+                  onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }}
+                >
+                  <button
+                    type="button"
+                    onClick={() => onOpenEditPortal(portal)}
+                    className="btn-press h-7 w-7 rounded-lg bg-[#0b100d] hover:bg-[#1b251f] text-[#A9B99D] hover:text-[#EDE9DE] flex items-center justify-center cursor-pointer"
+                    title="Editar Portal / App"
+                    aria-label={`Editar ${portal.name}`}
+                  >
+                    <Pencil className="w-3 h-3" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onRemovePortal(portal.id)}
+                    className="btn-press h-7 w-7 rounded-lg bg-[#0b100d] hover:bg-rose-950/60 text-[#A9B99D] hover:text-rose-400 flex items-center justify-center cursor-pointer"
+                    title="Remover Portal / App"
+                    aria-label={`Remover ${portal.name}`}
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
                 </div>
               </div>
 
-              <div
-                className="flex items-center gap-1 shrink-0"
-                onClick={(e) => {
-                  e.preventDefault();
-                  e.stopPropagation();
-                }}
-              >
-                <button
-                  type="button"
-                  onClick={() => onOpenEditPortal(portal)}
-                  className="btn-press h-7 w-7 rounded-lg bg-[#0b100d] hover:bg-[#1b251f] text-[#A9B99D] hover:text-[#EDE9DE] flex items-center justify-center cursor-pointer"
-                  title="Editar Portal / App"
-                  aria-label={`Editar ${portal.name}`}
-                >
-                  <Pencil className="w-3 h-3" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onRemovePortal(portal.id)}
-                  className="btn-press h-7 w-7 rounded-lg bg-[#0b100d] hover:bg-rose-950/60 text-[#A9B99D] hover:text-rose-400 flex items-center justify-center cursor-pointer"
-                  title="Remover Portal / App"
-                  aria-label={`Remover ${portal.name}`}
-                >
-                  <Trash2 className="w-3 h-3" />
-                </button>
+              <div className="pt-2 border-t border-[#777F89]/20 flex items-center justify-between gap-2 text-[11px]">
+                <span className="inline-flex items-center px-1.5 py-0.5 rounded-md border bg-[#0b100d] border-[#777F89]/35 text-[#EDE9DE]/90 text-[10px] font-semibold shrink-0">
+                  {portal.kind}
+                </span>
+                <span className="text-[#A9B99D] truncate">
+                  {isBoth99 ? '99 · Rides & Food' : front.label}
+                </span>
               </div>
             </a>
           );
@@ -243,18 +279,25 @@ export function FoldersModule({
   }
 
   function renderSheetsOrganizerAndGrid(items: KishiSheet[], emptyText: string) {
-    const filteredItems =
+    const colorFiltered =
       sheetColorFilter === 'all'
         ? items
         : sheetColorFilter === 'none'
           ? items.filter((s) => !s.color)
           : items.filter((s) => s.color === sheetColorFilter);
 
+    const filteredItems =
+      sheetKindFilter === 'all'
+        ? colorFiltered
+        : colorFiltered.filter(
+            (s) => detectResourceKind(s.url, s.type, s.resourceKind) === sheetKindFilter,
+          );
+
     const hasUncolored = items.some((s) => !s.color);
 
     return (
       <div className="space-y-3">
-        {/* Barra de Filtros por Cor + Customizar Títulos */}
+        {/* Barra de Filtros por Cor + Tipo + Customizar Títulos */}
         <div className="flex flex-wrap items-center justify-between gap-2 pt-0.5">
           <div className="flex flex-wrap items-center gap-1.5">
             <button
@@ -307,18 +350,37 @@ export function FoldersModule({
             )}
           </div>
 
-          <button
-            type="button"
-            onClick={openColorLabelsEditor}
-            className={`btn-press px-2.5 py-1 rounded-lg border text-[11px] font-semibold flex items-center gap-1.5 cursor-pointer shrink-0 ${
-              editingColorsOpen
-                ? 'bg-[#C5A66B]/20 border-[#C5A66B] text-[#C5A66B]'
-                : 'bg-[#0b100d] border-[#777F89]/40 text-[#A9B99D] hover:text-[#EDE9DE]'
-            }`}
-          >
-            <Palette className="w-3 h-3" />
-            <span>{editingColorsOpen ? 'Fechar Cores' : 'Títulos das Cores'}</span>
-          </button>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <select
+              value={sheetKindFilter}
+              onChange={(e) =>
+                setSheetKindFilter(e.target.value as 'all' | SheetResourceKind)
+              }
+              aria-label="Filtrar por tipo de arquivo"
+              className="px-2.5 py-1 rounded-lg border border-[#777F89]/40 bg-[#0b100d] text-[11px] font-semibold text-[#EDE9DE] focus:outline-none focus:border-[#C5A66B] cursor-pointer"
+            >
+              <option value="all">Todos os tipos</option>
+              {LINK_RESOURCE_KINDS.map((k) => (
+                <option key={k.id} value={k.id}>
+                  {k.label}
+                </option>
+              ))}
+              <option value="arquivo">Arquivo</option>
+            </select>
+
+            <button
+              type="button"
+              onClick={openColorLabelsEditor}
+              className={`btn-press px-2.5 py-1 rounded-lg border text-[11px] font-semibold flex items-center gap-1.5 cursor-pointer shrink-0 ${
+                editingColorsOpen
+                  ? 'bg-[#C5A66B]/20 border-[#C5A66B] text-[#C5A66B]'
+                  : 'bg-[#0b100d] border-[#777F89]/40 text-[#A9B99D] hover:text-[#EDE9DE]'
+              }`}
+            >
+              <Palette className="w-3 h-3" />
+              <span>{editingColorsOpen ? 'Fechar Cores' : 'Títulos das Cores'}</span>
+            </button>
+          </div>
         </div>
 
         {/* Editor Inline de Títulos das Cores */}
@@ -326,7 +388,7 @@ export function FoldersModule({
           <div className="p-3.5 rounded-xl bg-[#0b100d] border border-[#C5A66B]/40 space-y-3">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <p className="text-[11px] text-[#A9B99D]">
-                Personalize o nome de cada cor para identificar suas planilhas (ex: Vermelho ={' '}
+                Personalize o nome de cada cor para identificar seus links (ex: Vermelho ={' '}
                 <strong className="text-[#EDE9DE]">CP atualiza</strong>).
               </p>
               <button
@@ -368,15 +430,17 @@ export function FoldersModule({
           <div className="text-center py-6 text-[#A9B99D] text-xs border border-dashed border-[#777F89]/40 rounded-xl">
             {items.length === 0
               ? emptyText
-              : 'Nenhuma planilha ou arquivo encontrado com esta cor selecionada.'}
+              : 'Nenhum item encontrado com os filtros selecionados.'}
           </div>
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 auto-rows-fr">
             {filteredItems.map((sh) => {
               const front = getFrontStyle(sh.category);
               const isBoth99 = sh.category === '99';
               const colorMeta = getSheetColorMeta(sh.color);
               const colorLabel = sh.color ? getSheetColorLabel(sh.color, sheetColorLabels) : '';
+              const resourceKind = detectResourceKind(sh.url, sh.type, sh.resourceKind);
+              const kindMeta = getResourceKindMeta(resourceKind);
 
               return (
                 <a
@@ -384,65 +448,88 @@ export function FoldersModule({
                   href={sh.url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className={`interactive-card group p-3.5 rounded-xl bg-[#0f1512]/80 border border-[#777F89]/40 ${
+                  className={`interactive-card group h-full p-3.5 rounded-xl bg-[#0f1512]/80 border border-[#777F89]/40 ${
                     colorMeta ? colorMeta.borderClass : front.cardBorderClass
-                  } flex items-start justify-between gap-3 focus:outline-none`}
+                  } flex flex-col justify-between gap-2.5 focus:outline-none`}
                 >
-                  <div className="flex items-start gap-3 min-w-0 flex-1">
-                    <div
-                      className={`h-9 ${isBoth99 ? 'px-2' : 'w-9'} rounded-lg flex items-center justify-center shrink-0 mt-0.5 ${front.iconBgClass}`}
-                    >
-                      {renderFrontIcon(sh.category, sh.type === 'file' ? 'file' : 'sheet')}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <h4 className="text-sm font-bold text-[#EDE9DE] group-hover:text-[#C5A66B] transition-colors leading-snug break-words">
+                  {/* Cabeçalho compacto: Ícone do tipo + Título + Ações */}
+                  <div className="flex items-start justify-between gap-2.5">
+                    <div className="flex items-start gap-2.5 min-w-0 flex-1">
+                      <div
+                        className={`h-8 w-8 rounded-lg flex items-center justify-center shrink-0 ${kindMeta.iconBoxClass}`}
+                        title={kindMeta.label}
+                      >
+                        {renderResourceKindIcon(resourceKind)}
+                      </div>
+                      <h4
+                        title={sh.name}
+                        className="text-[13px] font-bold text-[#EDE9DE] group-hover:text-[#C5A66B] transition-colors leading-snug line-clamp-2 break-words pt-0.5"
+                      >
                         {sh.name}
                       </h4>
-                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-[#A9B99D] mt-0.5">
-                        <span>
-                          {sh.type === 'file' ? 'Arquivo' : 'Planilha'} ·{' '}
-                          {isBoth99 ? '99' : front.label}
-                        </span>
-                        {colorMeta && colorLabel && (
-                          <span className={`inline-flex items-center gap-1 font-semibold ${colorMeta.textClass}`}>
-                            <span className={`h-2 w-2 rounded-full shrink-0 ${colorMeta.dotClass}`} />
-                            <span>{colorLabel}</span>
-                          </span>
-                        )}
-                      </div>
-                      {sh.obs && (
-                        <p className="text-[11px] text-[#EDE9DE]/90 bg-[#151d18] border border-[#777F89]/30 rounded-lg px-2 py-1 mt-1.5 break-words leading-snug">
-                          {sh.obs}
-                        </p>
-                      )}
+                    </div>
+
+                    <div
+                      className="flex items-center gap-1 shrink-0"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                      }}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => onOpenEditSheet(sh)}
+                        className="btn-press h-7 w-7 rounded-lg bg-[#0b100d] hover:bg-[#1b251f] text-[#A9B99D] hover:text-[#EDE9DE] flex items-center justify-center cursor-pointer"
+                        title="Editar Item / Tipo / Cor / Obs"
+                        aria-label={`Editar ${sh.name}`}
+                      >
+                        <Pencil className="w-3 h-3" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onRemoveSheet(sh.id)}
+                        className="btn-press h-7 w-7 rounded-lg bg-[#0b100d] hover:bg-rose-950/60 text-[#A9B99D] hover:text-rose-400 flex items-center justify-center cursor-pointer"
+                        title="Remover da lista"
+                        aria-label={`Remover ${sh.name}`}
+                      >
+                        <Trash2 className="w-3 h-3" />
+                      </button>
                     </div>
                   </div>
 
-                  <div
-                    className="flex items-center gap-1 shrink-0"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      e.stopPropagation();
-                    }}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => onOpenEditSheet(sh)}
-                      className="btn-press h-7 w-7 rounded-lg bg-[#0b100d] hover:bg-[#1b251f] text-[#A9B99D] hover:text-[#EDE9DE] flex items-center justify-center cursor-pointer"
-                      title="Editar Planilha / Cor / Obs"
-                      aria-label={`Editar ${sh.name}`}
-                    >
-                      <Pencil className="w-3 h-3" />
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => onRemoveSheet(sh.id)}
-                      className="btn-press h-7 w-7 rounded-lg bg-[#0b100d] hover:bg-rose-950/60 text-[#A9B99D] hover:text-rose-400 flex items-center justify-center cursor-pointer"
-                      title="Remover da lista"
-                      aria-label={`Remover planilha ${sh.name}`}
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </button>
+                  {/* Rodapé organizado em largura total */}
+                  <div className="space-y-2 pt-2 border-t border-[#777F89]/20">
+                    {sh.obs && (
+                      <p
+                        title={sh.obs}
+                        className="text-[11px] text-[#EDE9DE]/90 bg-[#151d18] border border-[#777F89]/30 rounded-lg px-2.5 py-1.5 line-clamp-2 break-words leading-snug"
+                      >
+                        {sh.obs}
+                      </p>
+                    )}
+
+                    <div className="flex items-center justify-between gap-2 min-w-0">
+                      <div className="flex items-center gap-1.5 min-w-0">
+                        <span
+                          className={`inline-flex items-center px-1.5 py-0.5 rounded-md border text-[10px] font-bold shrink-0 ${kindMeta.badgeClass}`}
+                        >
+                          {kindMeta.label}
+                        </span>
+                        <span className="text-[11px] text-[#A9B99D] truncate">
+                          {isBoth99 ? '99 · Rides & Food' : front.label}
+                        </span>
+                      </div>
+
+                      {colorMeta && colorLabel && (
+                        <span
+                          title={colorLabel}
+                          className={`inline-flex items-center gap-1 text-[11px] font-semibold truncate max-w-[125px] shrink-0 ${colorMeta.textClass}`}
+                        >
+                          <span className={`h-2 w-2 rounded-full shrink-0 ${colorMeta.dotClass}`} />
+                          <span className="truncate">{colorLabel}</span>
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </a>
               );
@@ -532,12 +619,13 @@ export function FoldersModule({
       {isOverview ? (
         <div className="space-y-6">
           {/* Bloco 1: Portais & Apps (Rides & Food) */}
-          <div className="bg-[#151d18] border border-[#777F89]/40 rounded-2xl p-5 space-y-3.5">
+          <div className="bg-[#151d18] border border-[#777F89]/40 rounded-2xl p-4 sm:p-5 space-y-3.5">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <h3 className="text-sm font-bold text-[#EDE9DE] flex items-center gap-2">
                   <LayoutGrid className="w-4 h-4 text-sky-300" />
                   <span>Portais &amp; Apps (99 · Rides &amp; Food)</span>
+                  <SumerianGlyphWhisper glyphs="𒆠" className="text-[10px]" />
                 </h3>
                 <p className="text-xs text-[#A9B99D] mt-0.5">
                   Portais e ferramentas compartilhados entre os dois canais. Clique no card para abrir.
@@ -560,7 +648,7 @@ export function FoldersModule({
           </div>
 
           {/* Bloco 2: Planilhas & Arquivos (Rides & Food) */}
-          <div className="bg-[#151d18] border border-[#777F89]/40 rounded-2xl p-5 space-y-3.5">
+          <div className="bg-[#151d18] border border-[#777F89]/40 rounded-2xl p-4 sm:p-5 space-y-3.5">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <h3 className="text-sm font-bold text-[#EDE9DE] flex items-center gap-2">
@@ -580,7 +668,7 @@ export function FoldersModule({
                     type="file"
                     className="hidden"
                     multiple
-                    accept=".xlsx,.xls,.csv,.pdf"
+                    accept=".xlsx,.xls,.csv,.pdf,.doc,.docx,.ppt,.pptx"
                     onChange={(e) => handleFileInput(e, '99')}
                   />
                 </label>
@@ -671,7 +759,7 @@ export function FoldersModule({
       ) : (
         <div className="space-y-6">
           {/* Planilhas & Arquivos da frente */}
-          <div className="bg-[#151d18] border border-[#777F89]/40 rounded-2xl p-5 space-y-3.5">
+          <div className="bg-[#151d18] border border-[#777F89]/40 rounded-2xl p-4 sm:p-5 space-y-3.5">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
               <div>
                 <h3 className="text-sm font-bold text-[#EDE9DE] flex items-center gap-2">
@@ -697,7 +785,7 @@ export function FoldersModule({
                     type="file"
                     className="hidden"
                     multiple
-                    accept=".xlsx,.xls,.csv,.pdf"
+                    accept=".xlsx,.xls,.csv,.pdf,.doc,.docx,.ppt,.pptx"
                     onChange={(e) => handleFileInput(e, folderCategory)}
                   />
                 </label>
@@ -757,7 +845,7 @@ export function FoldersModule({
                   <span>{isRides ? 'Afazeres Comuns — 99 Rides' : 'Afazeres Comuns — 99 Food'}</span>
                 </span>
                 <p className="text-[11px] text-[#A9B99D] mt-0.5">
-                  Conectado em tempo real com Tarefas do Dia e Quadro de Tarefas. Filtre por dia ou veja todas as rotinas.
+                  Conectado automaticamente com Tarefas do Dia e Quadro de Tarefas. Filtre por dia ou veja todas as rotinas.
                 </p>
               </div>
 

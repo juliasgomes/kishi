@@ -42,6 +42,7 @@ interface CampaignSetupModalProps {
     sheetUrl: string;
     autoSync: boolean;
     notes: string;
+    lastSheetTitle?: string;
     importedRows?: ParsedSheetRow[] | null;
     replaceWithImported?: boolean;
   }) => void;
@@ -66,6 +67,7 @@ export function CampaignSetupModal({
   const [parsedRows, setParsedRows] = useState<ParsedSheetRow[] | null>(null);
   const [importMode, setImportMode] = useState<'sync' | 'merge'>('sync');
   const [lastReadUrl, setLastReadUrl] = useState('');
+  const [fetchedSheetTitle, setFetchedSheetTitle] = useState<string | undefined>(undefined);
   const [syncing, setSyncing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [feedback, setFeedback] = useState<{ type: 'error' | 'info'; message: string } | null>(null);
@@ -90,6 +92,7 @@ export function CampaignSetupModal({
       );
       setNotes(editingCampaign.notes || '');
       setLastReadUrl(editingCampaign.sheetUrl || '');
+      setFetchedSheetTitle(editingCampaign.lastSheetTitle);
       setShowManualPaste(!editingCampaign.sheetUrl);
       setImportMode(editingCampaign.sheetUrl ? 'sync' : 'merge');
     } else {
@@ -99,6 +102,7 @@ export function CampaignSetupModal({
       setAutoSync(true);
       setNotes('');
       setLastReadUrl('');
+      setFetchedSheetTitle(undefined);
       setShowManualPaste(false);
       setImportMode('sync');
     }
@@ -139,6 +143,16 @@ export function CampaignSetupModal({
         setShowManualPaste(true);
       }
       return null;
+    }
+
+    if (res.docTitle) {
+      setFetchedSheetTitle(res.docTitle);
+      if (!name.trim()) {
+        setName(res.docTitle);
+      }
+    }
+    if (!editingCampaign && (res.detectedCategory === '99 Food' || res.detectedCategory === '99 Rides')) {
+      setFront(res.detectedCategory);
     }
 
     const rows = parseDelimitedSheetText(res.csv);
@@ -246,28 +260,39 @@ export function CampaignSetupModal({
   }
 
   async function handleSubmit() {
-    if (!name.trim() || saving) return;
+    if (saving) return;
 
     const cleanUrl = sheetUrl.trim();
     let rowsToSave = parsedRows;
+    let resolvedName = name.trim();
 
     // If the user pasted a new/updated Google Sheets URL and hit Save without clicking "Ler Link", auto-read it!
     if (cleanUrl && cleanUrl !== lastReadUrl && !pastedText.trim()) {
       setSaving(true);
-      const fetched = await readSheetFromUrl(cleanUrl);
+      const fetchedRes = await syncGoogleSheetUrl(cleanUrl);
       setSaving(false);
-      if (fetched && fetched.length > 0) {
-        rowsToSave = fetched;
+      if (fetchedRes.ok && fetchedRes.csv) {
+        const fetched = parseDelimitedSheetText(fetchedRes.csv);
+        if (fetched.length > 0) rowsToSave = fetched;
+        if (!resolvedName && fetchedRes.docTitle) {
+          resolvedName = fetchedRes.docTitle;
+        }
+        if (fetchedRes.docTitle) {
+          setFetchedSheetTitle(fetchedRes.docTitle);
+        }
       }
     }
 
+    if (!resolvedName) return;
+
     onSave({
       id: editingCampaign?.id,
-      name: name.trim(),
+      name: resolvedName,
       front,
       sheetUrl: cleanUrl,
       autoSync: Boolean(cleanUrl) && autoSync,
       notes: notes.trim(),
+      lastSheetTitle: fetchedSheetTitle,
       importedRows: rowsToSave,
       replaceWithImported: Boolean(rowsToSave && rowsToSave.length > 0) && importMode === 'sync',
     });
@@ -351,7 +376,7 @@ export function CampaignSetupModal({
             </div>
           </div>
 
-          {/* Vincular Planilha em Tempo Real */}
+          {/* Vincular Planilha */}
           <div className="p-3.5 rounded-xl bg-[#0b100d] border border-[#777F89]/45 space-y-2.5">
             <div className="flex items-center justify-between gap-2">
               <label className="text-[#EDE9DE] font-bold flex items-center gap-1.5">
@@ -390,7 +415,7 @@ export function CampaignSetupModal({
                 className="h-3.5 w-3.5 rounded bg-[#151d18] accent-[#C5A66B] cursor-pointer"
               />
               <span>
-                <strong>Sincronização automática em tempo real:</strong> quando você alterar o status na planilha, o app atualiza sozinho (~20s e ao voltar para esta aba).
+                <strong>Sincronização automática:</strong> quando houver alteração na planilha (planos, nome ou frente), o app atualiza sozinho.
               </span>
             </label>
           </div>

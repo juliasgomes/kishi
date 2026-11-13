@@ -228,7 +228,13 @@ export function findDuplicateLinks(
 }
 
 export async function hashNormalizedCsv(csvText: string): Promise<string> {
-  const normalized = csvText.replace(/\r\n/g, '\n').trim();
+  const normalized = csvText
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((line) => line.replace(/,+$/g, '').trimEnd())
+    .filter((line) => line.trim().length > 0)
+    .join('\n')
+    .trim();
   if (typeof crypto !== 'undefined' && crypto.subtle && typeof TextEncoder !== 'undefined') {
     try {
       const bytes = new TextEncoder().encode(normalized);

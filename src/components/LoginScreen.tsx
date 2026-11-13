@@ -1,7 +1,11 @@
 import { useState, type FormEvent } from 'react';
 import { Eye, EyeOff, Lock, Mail, MailCheck, RefreshCw, LogOut } from 'lucide-react';
 import type { User } from 'firebase/auth';
-import { KishiLogoSvg } from '@/src/components/KishiIcons';
+import {
+  KishiLogoSvg,
+  RealisticMicroAntSvg,
+  SumerianGlyphWhisper,
+} from '@/src/components/KishiIcons';
 
 interface LoginScreenProps {
   pendingVerificationUser: User | null;
@@ -119,8 +123,9 @@ export function LoginScreen({
     <div className="min-h-screen bg-[#0f1512] text-[#EDE9DE] flex items-center justify-center p-5">
       <div className="w-full max-w-sm bg-[#151d18] border border-[#777F89]/45 rounded-2xl p-6 sm:p-7 shadow-2xl space-y-6">
         <div className="flex flex-col items-center text-center gap-3">
-          <div className="h-14 w-14 rounded-2xl bg-[#0b100d] border border-[#C5A66B]/45 flex items-center justify-center shadow-md">
+          <div className="relative h-14 w-14 rounded-2xl bg-[#0b100d] border border-[#C5A66B]/45 flex items-center justify-center shadow-md">
             <KishiLogoSvg className="h-9 w-9 text-[#C5A66B]" />
+            <RealisticMicroAntSvg className="w-3 h-3 text-[#C5A66B]/65 absolute -bottom-1 -right-1 rotate-[-32deg]" />
           </div>
           <div>
             <h1 className="font-extrabold text-xl tracking-[0.25em] text-[#EDE9DE] font-['Montserrat',sans-serif]">
@@ -129,6 +134,10 @@ export function LoginScreen({
             <p className="text-xs text-[#A9B99D] mt-1">
               {pendingVerificationUser ? 'Confirmação de e-mail' : 'Acesso privado'}
             </p>
+            <SumerianGlyphWhisper
+              glyphs="𒆧  𒁾  𒌓"
+              className="block mt-1 text-[10px] opacity-80"
+            />
           </div>
         </div>
 

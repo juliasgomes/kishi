@@ -9,7 +9,12 @@ import {
   Megaphone,
   Sparkles,
 } from 'lucide-react';
-import { ChatDotAntSvg } from '@/src/components/KishiIcons';
+import { triggerAntScurry } from '@/src/components/AntTrailOverlay';
+import {
+  ChatDotAntSvg,
+  RealisticMicroAntSvg,
+  SumerianGlyphWhisper,
+} from '@/src/components/KishiIcons';
 import type {
   KishiActiveCampaign,
   KishiTask,
@@ -303,18 +308,27 @@ export function DailyBriefingMural({
   return (
     <div className="bg-gradient-to-br from-[#151d18] via-[#131a16] to-[#0f1512] border border-[#C5A66B]/35 rounded-2xl p-4 sm:p-5 shadow-lg space-y-3.5">
       {/* Cabeçalho */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div className="flex items-start sm:items-center gap-3 min-w-0">
-          <div className="h-10 w-10 rounded-xl bg-[#0b100d] border border-[#C5A66B]/45 flex items-center justify-center shrink-0 shadow-sm">
+      <div className="flex items-start sm:items-center justify-between gap-2.5 sm:gap-3">
+        <div className="flex items-start sm:items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
+          <button
+            type="button"
+            onClick={(e) => {
+              const rect = e.currentTarget.getBoundingClientRect();
+              triggerAntScurry(rect.left + rect.width / 2, rect.top + rect.height / 2, 2);
+            }}
+            className="h-9 w-9 sm:h-10 sm:w-10 rounded-xl bg-[#0b100d] border border-[#C5A66B]/45 hover:border-[#C5A66B] flex items-center justify-center shrink-0 shadow-sm cursor-pointer transition-colors"
+            title="Kiši"
+            aria-label="Ícone Kishi"
+          >
             <ChatDotAntSvg className="w-5 h-5 text-[#C5A66B]" />
-          </div>
-          <div className="min-w-0">
-            <div className="flex items-center gap-2.5 flex-wrap">
+          </button>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 sm:gap-2.5 flex-wrap">
               <span className="text-xs sm:text-sm font-extrabold text-[#EDE9DE]">
                 {greeting}, {displayName}!
               </span>
               <span
-                className="inline-flex items-center gap-1 text-xs font-mono font-semibold text-[#C5A66B] tabular-nums"
+                className="inline-flex items-center gap-1 text-[11px] sm:text-xs font-mono font-semibold text-[#C5A66B] tabular-nums"
                 title="Relógio de Brasília"
               >
                 <Clock className="w-3.5 h-3.5 text-[#C5A66B]" />
@@ -322,24 +336,27 @@ export function DailyBriefingMural({
               </span>
             </div>
             {collapsed && (
-              <p className="text-[11px] text-[#A9B99D] mt-0.5 truncate">
-                {summary.pendingTasksCount} tarefa(s) · {summary.unextractedCount} não extraído(s) · Estimado: {formatDuration(summary.totalEstimatedMinutes)} · Restam no trabalho: {formatDuration(workStats.totalAvailableMinutes)}
+              <p className="text-[11px] text-[#A9B99D] mt-0.5 line-clamp-2 sm:truncate">
+                {summary.pendingTasksCount} tarefa(s) · {summary.unextractedCount} não extraído(s) · {formatDuration(summary.totalEstimatedMinutes)} est. · Restam {formatDuration(workStats.totalAvailableMinutes)}
               </p>
             )}
           </div>
         </div>
 
-        <div className="flex items-center gap-1.5 flex-wrap shrink-0">
+        <div className="flex items-center gap-1.5 shrink-0">
           {!collapsed && (
             <button
               type="button"
               onClick={() => void handleGenerateAiBriefing()}
               disabled={aiLoading}
-              className="btn-press px-2.5 py-1.5 rounded-xl bg-[#0b100d] hover:bg-[#1b251f] disabled:opacity-60 text-[#EDE9DE] text-[11px] font-semibold border border-[#777F89]/50 flex items-center gap-1.5 cursor-pointer"
+              className="btn-press px-2.5 py-1.5 rounded-xl bg-[#0b100d] hover:bg-[#1b251f] disabled:opacity-60 text-[#EDE9DE] text-[11px] font-semibold border border-[#777F89]/50 flex items-center gap-1.5 cursor-pointer whitespace-nowrap"
               title="Gerar leitura inteligente"
             >
               <Sparkles className={`w-3.5 h-3.5 text-[#C5A66B] ${aiLoading ? 'animate-pulse' : ''}`} />
-              <span>{aiLoading ? 'Analisando...' : aiSummary ? 'Atualizar IA' : 'Resumo IA'}</span>
+              <span className="hidden xs:inline sm:inline">
+                {aiLoading ? 'Analisando...' : aiSummary ? 'Atualizar IA' : 'Resumo IA'}
+              </span>
+              <span className="xs:hidden sm:hidden">{aiLoading ? '...' : 'IA'}</span>
             </button>
           )}
 
@@ -429,6 +446,14 @@ export function DailyBriefingMural({
                 {formatDuration(workStats.totalAvailableMinutes)}
               </div>
             </div>
+          </div>
+
+          <div className="flex items-center justify-end gap-2 pt-0.5 opacity-60">
+            <SumerianGlyphWhisper
+              glyphs="𒆧  𒋗  𒌓  𒁾"
+              className="text-[10px]"
+            />
+            <RealisticMicroAntSvg className="w-2.5 h-2.5 text-[#C5A66B]/60 rotate-[-24deg]" />
           </div>
         </>
       )}

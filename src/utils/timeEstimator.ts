@@ -10,7 +10,6 @@ import { isTaskDueToday } from '@/src/utils/taskSchedule';
 export const DEFAULT_TIME_TAGS = [
   'Extração',
   'Plano de Mídia',
-  'Conferência',
   'Relatório',
   'Canais',
   'Geral',
@@ -30,14 +29,6 @@ export const DEFAULT_TIME_RULES: KishiTimeRule[] = [
     label: 'Atualizar Plano de Mídia',
     tag: 'Plano de Mídia',
     keywords: ['plano', 'midia', 'revisao', 'aba', 'investimento'],
-    minutes: 15,
-    appliesTo: 'all',
-  },
-  {
-    id: 'rule_conferencia',
-    label: 'Conferência de Canais / Base',
-    tag: 'Conferência',
-    keywords: ['conferir', 'validar', 'checar', 'divergencia', 'base', 'uol', 'logan', 'canal'],
     minutes: 15,
     appliesTo: 'all',
   },

@@ -42,6 +42,7 @@ export function KanbanModule({
 }: KanbanModuleProps) {
   const [draggedTaskId, setDraggedTaskId] = useState<string | null>(null);
   const [dragOverCol, setDragOverCol] = useState<TaskStatus | null>(null);
+  const [mobileColTab, setMobileColTab] = useState<TaskStatus>('afazer');
 
   function renderColIcon(id: TaskStatus) {
     switch (id) {
@@ -102,15 +103,42 @@ export function KanbanModule({
         </button>
       </div>
 
-      <div className="flex gap-4 overflow-x-auto pb-6 pt-1">
+      <div className="md:hidden grid grid-cols-4 gap-1 p-1 bg-[#151d18] border border-[#777F89]/40 rounded-xl">
+        {COLUMNS.map((col) => {
+          const count = tasks.filter((t) => t.status === col.id).length;
+          const active = mobileColTab === col.id;
+          return (
+            <button
+              key={`mob-tab-${col.id}`}
+              type="button"
+              onClick={() => setMobileColTab(col.id)}
+              className={`py-2 px-1.5 rounded-lg text-[11px] font-semibold transition flex items-center justify-center gap-1 cursor-pointer ${
+                active
+                  ? 'bg-[#0b100d] text-[#C5A66B] border border-[#777F89]/50'
+                  : 'text-[#A9B99D]'
+              }`}
+            >
+              <span className="truncate">
+                {col.id === 'andamento' ? 'Andam.' : col.id === 'concluido' ? 'Feito' : col.label}
+              </span>
+              <span className="font-mono text-[10px] opacity-80 tabular-nums">{count}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="flex flex-col md:flex-row gap-4 md:overflow-x-auto pb-4 md:pb-6 pt-1">
         {COLUMNS.map((col) => {
           const colTasks = tasks.filter((t) => t.status === col.id);
           const isOver = dragOverCol === col.id;
+          const isMobileActive = mobileColTab === col.id;
 
           return (
             <div
               key={col.id}
-              className="min-w-[290px] max-w-[330px] flex-1 min-h-[calc(100vh-15rem)] flex-shrink-0 bg-[#151d18] border border-[#777F89]/40 rounded-2xl p-3.5 flex flex-col gap-3"
+              className={`${
+                isMobileActive ? 'flex' : 'hidden md:flex'
+              } w-full md:min-w-[290px] md:max-w-[330px] flex-1 min-h-[340px] md:min-h-[calc(100vh-15rem)] flex-shrink-0 bg-[#151d18] border border-[#777F89]/40 rounded-2xl p-3.5 flex-col gap-3`}
             >
               <div
                 className={`flex justify-between items-center text-xs font-bold border-b border-[#777F89]/40 pb-2 ${

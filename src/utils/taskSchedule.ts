@@ -1,4 +1,5 @@
-import type { KishiTask } from '@/src/types/kishi';
+import type { KishiTask, WaveStatus } from '@/src/types/kishi';
+import { parseWaveDateTimestamp } from '@/src/utils/sheetParser';
 import { getBrasiliaTimeParts } from '@/src/utils/workHours';
 
 export function getBrasiliaTodayISO(now: Date = new Date()): string {
@@ -42,6 +43,35 @@ export function isTaskDueToday(task: KishiTask, now: Date = new Date()): boolean
   }
 
   return true;
+}
+
+export function isTaskOverdue(task: KishiTask, now: Date = new Date()): boolean {
+  if (task.status === 'concluido') return false;
+  if (!task.scheduledDate) return false;
+  if (task.frequency === 'Diária' || task.frequency === 'Mensal') return false;
+  const todayISO = getBrasiliaTodayISO(now);
+  return task.scheduledDate < todayISO;
+}
+
+export function getWaveDueState(
+  startDate?: string,
+  endDate?: string,
+  status?: WaveStatus,
+  now: Date = new Date(),
+): 'overdue' | 'due_today' | 'normal' {
+  if (status === 'extraido') return 'normal';
+  const targetStr = (endDate || startDate || '').trim();
+  if (!targetStr) return 'normal';
+
+  const targetTs = parseWaveDateTimestamp(targetStr);
+  if (targetTs === null) return 'normal';
+
+  const brt = getBrasiliaTimeParts(now);
+  const todayTs = new Date(brt.year, brt.month - 1, brt.day).getTime();
+
+  if (targetTs < todayTs) return 'overdue';
+  if (targetTs === todayTs) return 'due_today';
+  return 'normal';
 }
 
 export function isTaskScheduledForDate(

@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import type { KishiActiveCampaign, KishiWavePlan } from '@/src/types/kishi';
 import { parseWaveDateTimestamp } from '@/src/utils/sheetParser';
+import { getWaveDueState } from '@/src/utils/taskSchedule';
 
 type WaveSortMode =
   | 'sheet'
@@ -197,6 +198,12 @@ export function CampaignsModule({
     const isSyncing = Boolean(syncingCampaignIds[camp.id]);
     const campPending = camp.waves.filter((w) => w.status === 'nao_extraido').length;
     const campDone = camp.waves.filter((w) => w.status === 'extraido').length;
+    const overdueCount = camp.waves.filter(
+      (w) => getWaveDueState(w.startDate, w.endDate, w.status) === 'overdue',
+    ).length;
+    const dueTodayCount = camp.waves.filter(
+      (w) => getWaveDueState(w.startDate, w.endDate, w.status) === 'due_today',
+    ).length;
     const pendingTodos = camp.todos.filter((t) => !t.done).length;
 
     const visibleWaves = sortWaves(
@@ -230,9 +237,9 @@ export function CampaignsModule({
               onToggleExpand(camp.id);
             }
           }}
-          className="p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3 hover:bg-[#1b251f]/40 transition cursor-pointer select-none"
+          className="p-3.5 sm:p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-2.5 sm:gap-3 hover:bg-[#1b251f]/40 transition cursor-pointer select-none"
         >
-          <div className="flex items-center gap-3 min-w-0 flex-1">
+          <div className="flex items-center gap-2.5 sm:gap-3 min-w-0 flex-1">
             <span className="h-7 w-7 rounded-lg bg-[#0b100d] border border-[#777F89]/40 flex items-center justify-center text-[#A9B99D] shrink-0">
               {isExpanded ? (
                 <ChevronDown className="w-4 h-4 text-[#C5A66B]" />
@@ -242,7 +249,7 @@ export function CampaignsModule({
             </span>
 
             <div
-              className={`h-9 w-9 rounded-xl flex items-center justify-center shrink-0 ${
+              className={`h-8 w-8 sm:h-9 sm:w-9 rounded-xl flex items-center justify-center shrink-0 ${
                 isRides
                   ? 'bg-[#C5A66B]/15 border border-[#C5A66B]/30 text-[#C5A66B]'
                   : 'bg-orange-500/15 border border-orange-500/30 text-orange-300'
@@ -252,8 +259,10 @@ export function CampaignsModule({
             </div>
 
             <div className="min-w-0 flex-1">
-              <div className="flex items-center gap-2.5 flex-wrap">
-                <h3 className="text-sm font-extrabold text-[#EDE9DE] truncate">{camp.name}</h3>
+              <div className="flex items-center gap-2 sm:gap-2.5 flex-wrap">
+                <h3 className="text-xs sm:text-sm font-extrabold text-[#EDE9DE] truncate">
+                  {camp.name}
+                </h3>
                 <div className="flex items-center gap-2.5 text-[11px] font-mono tabular-nums shrink-0">
                   <span
                     className="inline-flex items-center gap-1.5 text-rose-300 font-bold"
@@ -270,21 +279,32 @@ export function CampaignsModule({
                     <span>{campDone}</span>
                   </span>
                 </div>
-                {camp.sheetUrl && camp.autoSync !== false && (
-                  <span className="text-[10px] font-mono font-semibold text-emerald-300 bg-emerald-500/10 border border-emerald-500/30 px-1.5 py-0.5 rounded-md">
-                    Tempo Real
-                  </span>
-                )}
               </div>
 
-              <div className="flex items-center gap-2.5 text-[11px] font-mono mt-0.5 flex-wrap text-[#A9B99D]">
+              <div className="flex items-center gap-2 text-[11px] font-mono mt-0.5 flex-wrap text-[#A9B99D]">
                 <span>{camp.waves.length} plano(s)</span>
                 <span className="text-[#777F89]">·</span>
                 <span>{pendingTodos} tarefa(s)</span>
-                {camp.lastSyncedAt && (
+                {overdueCount > 0 && (
                   <>
                     <span className="text-[#777F89]">·</span>
-                    <span>Sync: {camp.lastSyncedAt}</span>
+                    <span className="text-rose-300 font-semibold">
+                      {overdueCount} atrasado(s)
+                    </span>
+                  </>
+                )}
+                {dueTodayCount > 0 && (
+                  <>
+                    <span className="text-[#777F89]">·</span>
+                    <span className="text-amber-300 font-semibold">
+                      {dueTodayCount} vence hoje
+                    </span>
+                  </>
+                )}
+                {camp.lastSyncedAt && (
+                  <>
+                    <span className="text-[#777F89] hidden sm:inline">·</span>
+                    <span className="hidden sm:inline">Sync: {camp.lastSyncedAt}</span>
                   </>
                 )}
               </div>
@@ -293,7 +313,7 @@ export function CampaignsModule({
 
           {/* Ações rápidas sem abrir */}
           <div
-            className="flex items-center gap-1.5 flex-wrap shrink-0 pl-10 lg:pl-0"
+            className="flex items-center gap-1.5 flex-wrap shrink-0 lg:pl-0"
             onClick={(e) => e.stopPropagation()}
           >
             {camp.sheetUrl && (
@@ -382,16 +402,21 @@ export function CampaignsModule({
                 <div className="space-y-1.5">
                   {visibleWaves.map((wave) => {
                     const isPending = wave.status === 'nao_extraido';
+                    const dueState = getWaveDueState(wave.startDate, wave.endDate, wave.status);
                     return (
                       <div
                         key={wave.id}
-                        className={`p-3 rounded-xl bg-[#0b100d] border transition flex flex-col lg:flex-row lg:items-center justify-between gap-3 ${
-                          isPending
-                            ? 'border-rose-500/35 hover:border-rose-400/60'
-                            : 'border-[#777F89]/35 hover:border-emerald-400/50'
+                        className={`p-3 rounded-xl bg-[#0b100d] border transition flex flex-col lg:flex-row lg:items-center justify-between gap-2.5 sm:gap-3 ${
+                          dueState === 'overdue'
+                            ? 'border-rose-500/65 hover:border-rose-400'
+                            : dueState === 'due_today'
+                              ? 'border-amber-500/55 hover:border-amber-400'
+                              : isPending
+                                ? 'border-rose-500/35 hover:border-rose-400/60'
+                                : 'border-[#777F89]/35 hover:border-emerald-400/50'
                         }`}
                       >
-                        <div className="flex items-start gap-3 min-w-0 flex-1">
+                        <div className="flex items-start gap-2.5 sm:gap-3 min-w-0 flex-1">
                           <button
                             type="button"
                             onClick={() => onToggleWaveStatus(camp.id, wave.id)}
@@ -438,13 +463,26 @@ export function CampaignsModule({
                           </div>
                         </div>
 
-                        <div className="flex items-center justify-between lg:justify-end gap-3 shrink-0">
-                          <div className="flex items-center gap-3 text-[11px] font-mono text-[#A9B99D] tabular-nums">
+                        <div className="flex items-center justify-between lg:justify-end gap-2.5 sm:gap-3 shrink-0">
+                          <div className="flex items-center gap-2 sm:gap-3 text-[11px] font-mono text-[#A9B99D] tabular-nums flex-wrap">
                             {(wave.startDate || wave.endDate) && (
-                              <span className="flex items-center gap-1">
-                                <Calendar className="w-3 h-3 text-[#777F89]" />
+                              <span
+                                className={`flex items-center gap-1 ${
+                                  dueState === 'overdue'
+                                    ? 'text-rose-300 font-semibold'
+                                    : dueState === 'due_today'
+                                      ? 'text-amber-300 font-semibold'
+                                      : ''
+                                }`}
+                              >
+                                <Calendar className="w-3 h-3 opacity-75 shrink-0" />
                                 <span>
                                   {wave.startDate || '—'} → {wave.endDate || '—'}
+                                  {dueState === 'overdue'
+                                    ? ' · Atrasado'
+                                    : dueState === 'due_today'
+                                      ? ' · Vence hoje'
+                                      : ''}
                                 </span>
                               </span>
                             )}
@@ -614,7 +652,7 @@ export function CampaignsModule({
             <span>Campanhas Ativas &amp; Waves</span>
           </h1>
           <p className="text-xs text-[#A9B99D] mt-0.5">
-            Separe suas campanhas entre 99 Food e 99 Rides, sincronize planilhas em tempo real e abra só a campanha que quiser conferir.
+            Separe suas campanhas entre 99 Food e 99 Rides, sincronize suas planilhas e abra só a campanha que quiser conferir.
           </p>
         </div>
 
@@ -645,45 +683,45 @@ export function CampaignsModule({
       </div>
 
       {/* KPIs */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div className="interactive-card bg-[#151d18] border border-rose-500/35 rounded-2xl p-4 flex items-center justify-between">
-          <div>
-            <span className="text-[11px] font-semibold text-rose-300">
+      <div className="grid grid-cols-3 gap-2 sm:gap-4">
+        <div className="interactive-card bg-[#151d18] border border-rose-500/35 rounded-2xl p-3 sm:p-4 flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <span className="text-[10px] sm:text-[11px] font-semibold text-rose-300 block truncate">
               Não Extraído{frontTab !== 'all' ? ` · ${frontTab}` : ''}
             </span>
-            <div className="text-2xl font-extrabold text-rose-300 mt-0.5 tabular-nums font-mono">
+            <div className="text-lg sm:text-2xl font-extrabold text-rose-300 mt-0.5 tabular-nums font-mono">
               {totalNotExtracted}
             </div>
           </div>
-          <div className="h-10 w-10 rounded-xl bg-rose-500/15 border border-rose-500/30 flex items-center justify-center text-rose-300">
+          <div className="hidden sm:flex h-10 w-10 rounded-xl bg-rose-500/15 border border-rose-500/30 items-center justify-center text-rose-300 shrink-0">
             <AlertTriangle className="w-4 h-4" />
           </div>
         </div>
 
-        <div className="interactive-card bg-[#151d18] border border-emerald-500/35 rounded-2xl p-4 flex items-center justify-between">
-          <div>
-            <span className="text-[11px] font-semibold text-emerald-300">
+        <div className="interactive-card bg-[#151d18] border border-emerald-500/35 rounded-2xl p-3 sm:p-4 flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <span className="text-[10px] sm:text-[11px] font-semibold text-emerald-300 block truncate">
               Extraído{frontTab !== 'all' ? ` · ${frontTab}` : ''}
             </span>
-            <div className="text-2xl font-extrabold text-emerald-300 mt-0.5 tabular-nums font-mono">
+            <div className="text-lg sm:text-2xl font-extrabold text-emerald-300 mt-0.5 tabular-nums font-mono">
               {totalExtracted}
             </div>
           </div>
-          <div className="h-10 w-10 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-300">
+          <div className="hidden sm:flex h-10 w-10 rounded-xl bg-emerald-500/15 border border-emerald-500/30 items-center justify-center text-emerald-300 shrink-0">
             <CheckCircle2 className="w-4 h-4" />
           </div>
         </div>
 
-        <div className="interactive-card bg-[#151d18] border border-[#777F89]/40 rounded-2xl p-4 flex items-center justify-between">
-          <div>
-            <span className="text-[11px] font-semibold text-[#A9B99D]">
-              {frontTab === 'all' ? 'Campanhas Ativas' : `Campanhas · ${frontTab}`}
+        <div className="interactive-card bg-[#151d18] border border-[#777F89]/40 rounded-2xl p-3 sm:p-4 flex items-center justify-between gap-2">
+          <div className="min-w-0">
+            <span className="text-[10px] sm:text-[11px] font-semibold text-[#A9B99D] block truncate">
+              {frontTab === 'all' ? 'Campanhas' : frontTab}
             </span>
-            <div className="text-2xl font-extrabold text-[#C5A66B] mt-0.5 tabular-nums font-mono">
+            <div className="text-lg sm:text-2xl font-extrabold text-[#C5A66B] mt-0.5 tabular-nums font-mono">
               {kpiCampaigns.length}
             </div>
           </div>
-          <div className="h-10 w-10 rounded-xl bg-[#0f1512] flex items-center justify-center text-[#C5A66B]">
+          <div className="hidden sm:flex h-10 w-10 rounded-xl bg-[#0f1512] items-center justify-center text-[#C5A66B] shrink-0">
             <Megaphone className="w-4 h-4" />
           </div>
         </div>
@@ -855,7 +893,7 @@ export function CampaignsModule({
             </h3>
             <p className="text-xs text-[#A9B99D] leading-relaxed">
               {campaigns.length === 0
-                ? 'Clique em "Nova Campanha / Planilha" para criar uma campanha e já vincular sua planilha do Google Sheets em tempo real.'
+                ? 'Clique em "Nova Campanha / Planilha" para criar uma campanha e já vincular sua planilha do Google Sheets.'
                 : 'Tente limpar os filtros acima para visualizar suas campanhas.'}
             </p>
           </div>

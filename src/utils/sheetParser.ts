@@ -19,6 +19,27 @@ function normalizeText(value: string): string {
     .toLowerCase();
 }
 
+export function detectCategoryFromText(
+  ...samples: Array<string | undefined>
+): '99' | '99 Rides' | '99 Food' | undefined {
+  const combined = normalizeText(samples.filter(Boolean).join(' '));
+  if (!combined) return undefined;
+
+  const hasFood =
+    /\b(99\s*food|99food|food|b-?side|c-?side|d-?side|restaurante|delivery)\b/.test(
+      combined,
+    );
+  const hasRides =
+    /\b(99\s*rides|99rides|rides|ride|pax|drv|driver|corrida|corridas|motorista|passageiro)\b/.test(
+      combined,
+    );
+
+  if (hasFood && hasRides) return '99';
+  if (hasFood) return '99 Food';
+  if (hasRides) return '99 Rides';
+  return undefined;
+}
+
 export function detectWaveStatus(rawStatus: string): WaveStatus {
   const norm = normalizeText(rawStatus);
   if (!norm) return 'nao_extraido';

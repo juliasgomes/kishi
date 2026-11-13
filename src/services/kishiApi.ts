@@ -3,8 +3,15 @@ import type {
   KishiChannel,
   KishiCommonTask,
   KishiState,
+  KishiTask,
   KishiTimeRule,
+  SheetResourceKind,
 } from '@/src/types/kishi';
+import {
+  isValidResourceKind,
+  suggestResourceKindFromUrl,
+} from '@/src/utils/resourceKind';
+import { detectCategoryFromText } from '@/src/utils/sheetParser';
 import { DEFAULT_TIME_RULES } from '@/src/utils/timeEstimator';
 import { getBrasiliaTimeParts } from '@/src/utils/workHours';
 
@@ -78,6 +85,10 @@ function normalizeChannelList(
         typeof item.lastSyncedAt === 'string' && item.lastSyncedAt.trim()
           ? item.lastSyncedAt.trim()
           : undefined,
+      lastVerifiedAt:
+        typeof item.lastVerifiedAt === 'string' && item.lastVerifiedAt.trim()
+          ? item.lastVerifiedAt.trim()
+          : undefined,
     }))
     .filter((ch) => Boolean(ch.name));
 }
@@ -92,7 +103,24 @@ export function normalizeKishiState(raw: Partial<KishiState> | null | undefined)
       role: raw?.user?.role || seed.user.role || 'Operação 99 Food & Rides',
     },
     portals: Array.isArray(raw?.portals) ? raw.portals : seed.portals,
-    sheets: Array.isArray(raw?.sheets) ? raw.sheets : seed.sheets,
+    sheets: Array.isArray(raw?.sheets)
+      ? raw.sheets.map((sh) => ({
+          ...sh,
+          resourceKind: isValidResourceKind(sh.resourceKind) ? sh.resourceKind : undefined,
+          autoSyncMeta:
+            typeof sh.autoSyncMeta === 'boolean'
+              ? sh.autoSyncMeta
+              : sh.type === 'link',
+          lastSheetTitle:
+            typeof sh.lastSheetTitle === 'string' && sh.lastSheetTitle.trim()
+              ? sh.lastSheetTitle.trim()
+              : undefined,
+          lastSyncedAt:
+            typeof sh.lastSyncedAt === 'string' && sh.lastSyncedAt.trim()
+              ? sh.lastSyncedAt.trim()
+              : undefined,
+        }))
+      : seed.sheets,
     campaigns: {
       drv: Array.isArray(raw?.campaigns?.drv) ? raw.campaigns.drv : [],
       food: Array.isArray(raw?.campaigns?.food) ? raw.campaigns.food : [],
@@ -108,6 +136,10 @@ export function normalizeKishiState(raw: Partial<KishiState> | null | undefined)
               ? camp.autoSync
               : Boolean(camp.sheetUrl),
           lastSyncedAt: camp.lastSyncedAt || undefined,
+          lastSheetTitle:
+            typeof camp.lastSheetTitle === 'string' && camp.lastSheetTitle.trim()
+              ? camp.lastSheetTitle.trim()
+              : undefined,
           notes: camp.notes || undefined,
           waves: Array.isArray(camp.waves) ? camp.waves : [],
           todos: Array.isArray(camp.todos) ? camp.todos : [],
@@ -155,7 +187,19 @@ export function normalizeKishiState(raw: Partial<KishiState> | null | undefined)
         },
       },
     },
-    tasks: Array.isArray(raw?.tasks) ? raw.tasks : [],
+    tasks: Array.isArray(raw?.tasks)
+      ? raw.tasks.map((t: KishiTask) => {
+          const cleanTag = (t.tag || '')
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .trim()
+            .toLowerCase();
+          if (cleanTag === 'conferencia') {
+            return { ...t, tag: undefined };
+          }
+          return t;
+        })
+      : [],
     history: Array.isArray(raw?.history) ? raw.history : [],
     timeBank: {
       workStart:
@@ -187,7 +231,15 @@ export function normalizeKishiState(raw: Partial<KishiState> | null | undefined)
           ? raw.timeBank.defaultTodoMinutes
           : 0,
       timeRules: Array.isArray(raw?.timeBank?.timeRules)
-        ? normalizeTimeRules(raw.timeBank.timeRules)
+        ? normalizeTimeRules(raw.timeBank.timeRules).filter(
+            (r) =>
+              r.id !== 'rule_conferencia' &&
+              r.tag
+                .normalize('NFD')
+                .replace(/[\u0300-\u036f]/g, '')
+                .trim()
+                .toLowerCase() !== 'conferencia',
+          )
         : DEFAULT_TIME_RULES,
       sheetColorLabels: normalizeSheetColorLabels(raw?.timeBank?.sheetColorLabels),
     },
@@ -347,9 +399,37 @@ function extractGoogleSheetInfo(rawUrl: string): {
   };
 }
 
+function parseHeaderDocTitle(header: string | null): string | undefined {
+  if (!header) return undefined;
+  const utf8Match = header.match(/filename\*\s*=\s*UTF-8''([^;]+)/i);
+  let raw = utf8Match?.[1];
+  if (raw) {
+    try {
+      raw = decodeURIComponent(raw);
+    } catch {
+      // keep raw
+    }
+  } else {
+    const asciiMatch =
+      header.match(/filename\s*=\s*"([^"]+)"/i) || header.match(/filename\s*=\s*([^;]+)/i);
+    raw = asciiMatch?.[1]?.trim();
+  }
+  if (!raw) return undefined;
+  return raw.replace(/\.(csv|tsv|xlsx|xls)$/i, '').trim() || undefined;
+}
+
+export interface SyncGoogleSheetResult {
+  ok: boolean;
+  csv?: string;
+  docTitle?: string;
+  detectedCategory?: '99' | '99 Rides' | '99 Food';
+  requiresAuth?: boolean;
+  error?: string;
+}
+
 async function fetchGoogleSheetDirectInBrowser(
   info: { pubId?: string; sheetId?: string; gid: string },
-): Promise<{ ok: boolean; csv?: string; requiresAuth?: boolean; error?: string }> {
+): Promise<SyncGoogleSheetResult> {
   const candidates = info.pubId
     ? [
         `https://docs.google.com/spreadsheets/d/e/${info.pubId}/pub?output=csv${
@@ -375,6 +455,7 @@ async function fetchGoogleSheetDirectInBrowser(
       });
       const contentType = response.headers.get('content-type') || '';
       const finalUrl = response.url || '';
+      const docTitle = parseHeaderDocTitle(response.headers.get('content-disposition'));
       const bodyText = await response.text();
 
       if (
@@ -389,7 +470,9 @@ async function fetchGoogleSheetDirectInBrowser(
       }
 
       if (bodyText.trim()) {
-        return { ok: true, csv: bodyText };
+        const csvHead = bodyText.split('\n').slice(0, 6).join(' ');
+        const detectedCategory = detectCategoryFromText(docTitle, csvHead);
+        return { ok: true, csv: bodyText, docTitle, detectedCategory };
       }
     } catch {
       // Blocked by CORS or network when sheet requires Google login
@@ -405,9 +488,7 @@ async function fetchGoogleSheetDirectInBrowser(
   };
 }
 
-export async function syncGoogleSheetUrl(
-  url: string,
-): Promise<{ ok: boolean; csv?: string; requiresAuth?: boolean; error?: string }> {
+export async function syncGoogleSheetUrl(url: string): Promise<SyncGoogleSheetResult> {
   const parsed = extractGoogleSheetInfo(url);
   if (!parsed.ok) {
     return { ok: false, error: parsed.error };
@@ -424,12 +505,17 @@ export async function syncGoogleSheetUrl(
       const data = (await response.json()) as {
         ok?: boolean;
         csv?: string;
+        docTitle?: string;
         requiresAuth?: boolean;
         error?: string;
       };
+      const csvHead = data.csv ? data.csv.split('\n').slice(0, 6).join(' ') : '';
+      const detectedCategory = detectCategoryFromText(data.docTitle, csvHead);
       return {
         ok: Boolean(data.ok),
         csv: data.csv,
+        docTitle: data.docTitle,
+        detectedCategory,
         requiresAuth: data.requiresAuth,
         error: data.error,
       };
@@ -439,4 +525,65 @@ export async function syncGoogleSheetUrl(
   }
 
   return fetchGoogleSheetDirectInBrowser(parsed);
+}
+
+export interface InspectGoogleLinkResult {
+  ok: boolean;
+  title?: string;
+  resourceKind: Exclude<SheetResourceKind, 'arquivo'>;
+  category?: '99' | '99 Rides' | '99 Food';
+  requiresAuth?: boolean;
+}
+
+export async function inspectGoogleResourceLink(
+  url: string,
+): Promise<InspectGoogleLinkResult> {
+  const fallbackKind = suggestResourceKindFromUrl(url);
+
+  try {
+    const response = await fetch('/api/inspect-google-link', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ url }),
+    });
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const data = (await response.json()) as {
+        ok?: boolean;
+        title?: string;
+        resourceKind?: Exclude<SheetResourceKind, 'arquivo'>;
+        category?: '99' | '99 Rides' | '99 Food';
+        requiresAuth?: boolean;
+      };
+      if (data.ok) {
+        return {
+          ok: true,
+          title: data.title,
+          resourceKind: data.resourceKind || fallbackKind,
+          category: data.category,
+          requiresAuth: data.requiresAuth,
+        };
+      }
+    }
+  } catch {
+    // Static host fallback below
+  }
+
+  if (fallbackKind === 'planilha') {
+    const sheetRes = await syncGoogleSheetUrl(url);
+    if (sheetRes.ok) {
+      return {
+        ok: true,
+        title: sheetRes.docTitle,
+        resourceKind: 'planilha',
+        category: sheetRes.detectedCategory,
+      };
+    }
+  }
+
+  return {
+    ok: false,
+    resourceKind: fallbackKind,
+    category: detectCategoryFromText(url),
+  };
 }

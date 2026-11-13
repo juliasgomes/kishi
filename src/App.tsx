@@ -5,6 +5,9 @@ import {
   CheckCircle2,
   Clock,
   Download,
+  FileSpreadsheet,
+  FileText,
+  FolderOpen,
   FolderTree,
   Globe,
   History,
@@ -13,11 +16,13 @@ import {
   Kanban,
   LogOut,
   Megaphone,
+  Presentation,
   Search,
   ShieldCheck,
   Table2,
   Upload,
   UserPen,
+  X,
 } from 'lucide-react';
 import type { User } from 'firebase/auth';
 import bundledSeedData from '@/src/data/kishi-data.json';
@@ -30,7 +35,13 @@ import { ChatDotModule } from '@/src/components/ChatDotModule';
 import { FoldersModule } from '@/src/components/FoldersModule';
 import { HistoryModule } from '@/src/components/HistoryModule';
 import { KanbanModule } from '@/src/components/KanbanModule';
-import { ChatDotAntSvg, KishiLogoSvg } from '@/src/components/KishiIcons';
+import { AntTrailOverlay, triggerAntScurry } from '@/src/components/AntTrailOverlay';
+import {
+  ChatDotAntSvg,
+  KishiLogoSvg,
+  RealisticMicroAntSvg,
+  SumerianGlyphWhisper,
+} from '@/src/components/KishiIcons';
 import {
   ChannelModal,
   ConfirmModal,
@@ -65,6 +76,7 @@ import {
   getFormattedDateHeader,
   getFormattedTimeNow,
   getFormattedToday,
+  inspectGoogleResourceLink,
   normalizeKishiState,
   persistKishiState,
   syncGoogleSheetUrl,
@@ -85,10 +97,15 @@ import type {
   KishiWavePlan,
   ProductType,
   RouteId,
+  SheetResourceKind,
   TaskFrequency,
   TaskStatus,
   WaveStatus,
 } from '@/src/types/kishi';
+import {
+  detectResourceKind,
+  getResourceKindMeta,
+} from '@/src/utils/resourceKind';
 import {
   getWavesContentDigest,
   mergeParsedWaves,
@@ -98,6 +115,7 @@ import {
 } from '@/src/utils/sheetParser';
 import {
   getBrasiliaTodayISO,
+  getWaveDueState,
   isMonthlyDayMatch,
   isTaskDueToday,
 } from '@/src/utils/taskSchedule';
@@ -132,6 +150,7 @@ export default function App() {
 
   // Search, Alerts & Profile dropdowns
   const [searchQuery, setSearchQuery] = useState('');
+  const [mobileSearchOpen, setMobileSearchOpen] = useState(false);
   const [profileMenuOpen, setProfileMenuOpen] = useState(false);
   const [alertsMenuOpen, setAlertsMenuOpen] = useState(false);
   const [sheetAlerts, setSheetAlerts] = useState<
@@ -152,8 +171,10 @@ export default function App() {
     }
   });
   const searchBoxRef = useRef<HTMLDivElement | null>(null);
+  const mobileSearchBoxRef = useRef<HTMLDivElement | null>(null);
   const profileBoxRef = useRef<HTMLDivElement | null>(null);
   const alertsBoxRef = useRef<HTMLDivElement | null>(null);
+  const alertedDueWavesRef = useRef<Set<string>>(new Set());
 
   // Modals
   const [taskModalOpen, setTaskModalOpen] = useState(false);
@@ -249,9 +270,38 @@ export default function App() {
   }, [authUser]);
 
   const lastAutoSyncAtRef = useRef<number>(0);
+  const lastChannelPollAtRef = useRef<number>(0);
+  const lastSheetMetaPollAtRef = useRef<number>(0);
   const syncInFlightRef = useRef(false);
   const lastCsvSnapshotRef = useRef<Record<string, string>>({});
   const lastAlertedDigestRef = useRef<Record<string, string>>({});
+  const inMemoryChannelHashRef = useRef<Record<string, string>>({});
+
+  const pushUniqueSheetAlert = useCallback(
+    (
+      title: string,
+      kind: 'campaign' | 'channel',
+      timeFormatted: string,
+      unread: boolean,
+    ) => {
+      setSheetAlerts((prev) => {
+        const filtered = prev.filter(
+          (a) => !(a.kind === kind && a.title.toLowerCase() === title.toLowerCase()),
+        );
+        return [
+          {
+            id: `${kind}_alert_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
+            title,
+            kind,
+            timeFormatted,
+            unread,
+          },
+          ...filtered,
+        ].slice(0, 20);
+      });
+    },
+    [],
+  );
 
   const commitState = useCallback(
     (updater: (prev: KishiState) => KishiState) => {
@@ -572,7 +622,21 @@ export default function App() {
       }
 
       const normalizedCsv = res.csv.replace(/\r\n/g, '\n').trim();
-      if (silent && lastCsvSnapshotRef.current[campaignId] === normalizedCsv) {
+      const latestCamp = stateRef.current.activeCampaigns.find((c) => c.id === campaignId);
+      if (!latestCamp) return false;
+
+      const nextDocTitle = res.docTitle?.trim();
+      const docTitleChanged = Boolean(
+        nextDocTitle && latestCamp.lastSheetTitle && nextDocTitle !== latestCamp.lastSheetTitle,
+      );
+      const needsBaselineTitle = Boolean(nextDocTitle && !latestCamp.lastSheetTitle);
+
+      if (
+        silent &&
+        lastCsvSnapshotRef.current[campaignId] === normalizedCsv &&
+        !docTitleChanged &&
+        !needsBaselineTitle
+      ) {
         return false;
       }
 
@@ -584,17 +648,14 @@ export default function App() {
         return false;
       }
 
-      const latestCamp = stateRef.current.activeCampaigns.find((c) => c.id === campaignId);
-      if (!latestCamp) return false;
-
       const nextWaves = syncWavesFromSheet(latestCamp.waves, parsedRows);
       const prevDigest = getWavesContentDigest(latestCamp.waves);
       const nextDigest = getWavesContentDigest(nextWaves);
-      const changed = prevDigest !== nextDigest;
+      const wavesChanged = prevDigest !== nextDigest;
 
       lastCsvSnapshotRef.current[campaignId] = normalizedCsv;
 
-      if (!changed) {
+      if (!wavesChanged && !docTitleChanged && !needsBaselineTitle) {
         lastAlertedDigestRef.current[campaignId] = nextDigest;
         if (silent) {
           return false;
@@ -603,24 +664,89 @@ export default function App() {
         return false;
       }
 
-      const shouldAlert = lastAlertedDigestRef.current[campaignId] !== nextDigest;
+      const shouldAlert =
+        (wavesChanged && lastAlertedDigestRef.current[campaignId] !== nextDigest) ||
+        docTitleChanged;
       lastAlertedDigestRef.current[campaignId] = nextDigest;
 
       const timeNow = getFormattedTimeNow();
       const syncStamp = `${getFormattedToday()} às ${timeNow}`;
+      const nextName = docTitleChanged && nextDocTitle ? nextDocTitle : latestCamp.name;
+      const nextFront =
+        docTitleChanged &&
+        (res.detectedCategory === '99 Food' || res.detectedCategory === '99 Rides')
+          ? res.detectedCategory
+          : latestCamp.front;
+
+      const todayISO = getBrasiliaTodayISO();
+      const todayBR = getFormattedToday();
 
       setState((prev) => {
         const currentCamp = prev.activeCampaigns.find((c) => c.id === campaignId);
         if (!currentCamp) return prev;
         const freshNextWaves = syncWavesFromSheet(currentCamp.waves, parsedRows);
 
+        const resolvedFront: '99 Rides' | '99 Food' =
+          docTitleChanged &&
+          (res.detectedCategory === '99 Food' || res.detectedCategory === '99 Rides')
+            ? res.detectedCategory
+            : currentCamp.front;
+        const resolvedCampName =
+          docTitleChanged && nextDocTitle ? nextDocTitle : currentCamp.name;
+
+        let nextTasks = prev.tasks;
+        if (currentCamp.waves.length > 0) {
+          const newlyAddedPending = freshNextWaves.filter(
+            (w) =>
+              w.status === 'nao_extraido' &&
+              !currentCamp.waves.some(
+                (old) =>
+                  old.id === w.id ||
+                  old.planTitle.trim().toLowerCase() === w.planTitle.trim().toLowerCase(),
+              ),
+          );
+
+          for (const wave of newlyAddedPending) {
+            const existsOpen = nextTasks.some(
+              (t) =>
+                t.status !== 'concluido' &&
+                t.title.toLowerCase().includes(wave.planTitle.trim().toLowerCase()),
+            );
+            if (!existsOpen) {
+              const autoWaveTask: KishiTask = {
+                id: `TK-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+                product: resolvedFront,
+                subBrand: resolvedFront === '99 Rides' ? 'PAX' : 'B-Side',
+                channelType: 'Interno',
+                channelName: resolvedCampName,
+                title: `Extrair wave: ${wave.planTitle}`,
+                status: 'afazer',
+                frequency: 'Pontual',
+                scheduledDate: todayISO,
+                completedAt: null,
+                dateStr: todayBR,
+              };
+              nextTasks = [autoWaveTask, ...nextTasks];
+            }
+          }
+        }
+
         const nextState: KishiState = {
           ...prev,
           activeCampaigns: prev.activeCampaigns.map((c) =>
             c.id === campaignId
-              ? { ...c, waves: freshNextWaves, lastSyncedAt: syncStamp }
+              ? {
+                  ...c,
+                  name: resolvedCampName,
+                  front: resolvedFront,
+                  lastSheetTitle: nextDocTitle || c.lastSheetTitle,
+                  waves: freshNextWaves,
+                  lastSyncedAt:
+                    wavesChanged || docTitleChanged ? syncStamp : c.lastSyncedAt || syncStamp,
+                }
               : c,
           ),
+          tasks: nextTasks,
         };
         const currentUid = authUserRef.current?.uid;
         void persistKishiState(nextState, currentUid);
@@ -638,162 +764,270 @@ export default function App() {
       });
 
       if (shouldAlert) {
-        setSheetAlerts((prev) => [
-          {
-            id: `alert_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-            title: latestCamp.name,
-            kind: 'campaign',
-            timeFormatted: timeNow,
-            unread: silent,
-          },
-          ...prev.slice(0, 19),
-        ]);
+        pushUniqueSheetAlert(nextName, 'campaign', timeNow, silent);
       }
 
       if (!silent) {
-        showToast(`"${latestCamp.name}" atualizada!`);
+        showToast(
+          wavesChanged || docTitleChanged
+            ? `"${nextName}" atualizada!`
+            : `"${nextName}" já está atualizada (${parsedRows.length} planos).`,
+        );
       }
 
-      return true;
+      return wavesChanged || docTitleChanged;
     },
-    [showToast],
+    [pushUniqueSheetAlert, showToast],
   );
 
   // Silent internal sheet monitoring for channels (UOL, Logan, etc.)
-  const syncMonitoredChannels = useCallback(async () => {
-    const current = stateRef.current;
-    const folders: FolderKey[] = ['rides', 'food'];
-    const listKeys: Array<'internos' | 'externos'> = ['internos', 'externos'];
-
-    const targets: Array<{
-      folder: FolderKey;
-      listKey: 'internos' | 'externos';
-      index: number;
-      channel: KishiChannel;
-      sheetUrl: string;
-    }> = [];
-
-    for (const folder of folders) {
-      for (const listKey of listKeys) {
-        current.channels[folder][listKey].forEach((ch, idx) => {
-          if (!ch.watchChanges) return;
-          const targetUrl = (ch.monitorSheetUrl || ch.url || '').trim();
-          if (isGoogleSheetsUrl(targetUrl)) {
-            targets.push({
-              folder,
-              listKey,
-              index: idx,
-              channel: ch,
-              sheetUrl: targetUrl,
-            });
-          }
-        });
+  const syncMonitoredChannels = useCallback(
+    async (force = false) => {
+      const now = Date.now();
+      if (!force && now - lastChannelPollAtRef.current < 120_000) {
+        return;
       }
-    }
+      lastChannelPollAtRef.current = now;
 
-    if (targets.length === 0) return;
+      const current = stateRef.current;
+      const folders: FolderKey[] = ['rides', 'food'];
+      const listKeys: Array<'internos' | 'externos'> = ['internos', 'externos'];
 
-    for (const target of targets) {
-      const res = await syncGoogleSheetUrl(target.sheetUrl);
-      if (!res.ok || !res.csv) continue;
+      const targets: Array<{
+        folder: FolderKey;
+        listKey: 'internos' | 'externos';
+        index: number;
+        channel: KishiChannel;
+        sheetUrl: string;
+      }> = [];
 
-      const nextHash = await hashNormalizedCsv(res.csv);
-      const latestChannel =
-        stateRef.current.channels[target.folder][target.listKey][target.index];
-      if (!latestChannel || latestChannel.name !== target.channel.name) continue;
-
-      const prevHash = latestChannel.lastCsvHash;
-      if (prevHash === nextHash) continue;
-
-      const timeNow = getFormattedTimeNow();
-      const todayBR = getFormattedToday();
-      const todayISO = getBrasiliaTodayISO();
-      const syncStamp = `${todayBR} às ${timeNow}`;
-      const isInitialBaseline = !prevHash;
-
-      setState((prev) => {
-        const list = prev.channels[target.folder][target.listKey];
-        const chItem = list[target.index];
-        if (!chItem || chItem.name !== target.channel.name) return prev;
-
-        const nextList = list.map((item, idx) =>
-          idx === target.index
-            ? { ...item, lastCsvHash: nextHash, lastSyncedAt: syncStamp }
-            : item,
-        );
-
-        let nextTasks = prev.tasks;
-        if (!isInitialBaseline) {
-          const expectedTitle = `Conferir plano atualizado: ${chItem.name}`;
-          const alreadyPendingToday = prev.tasks.some(
-            (t) =>
-              t.status !== 'concluido' &&
-              t.channelName.toLowerCase() === chItem.name.toLowerCase() &&
-              t.title === expectedTitle,
-          );
-          if (!alreadyPendingToday) {
-            const autoTask: KishiTask = {
-              id: `TK-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
-              product: target.folder === 'food' ? '99 Food' : '99 Rides',
-              subBrand: target.folder === 'food' ? 'B-Side' : 'PAX',
-              channelType: chItem.type,
-              channelName: chItem.name,
-              title: expectedTitle,
-              status: 'afazer',
-              frequency: 'Pontual',
-              scheduledDate: todayISO,
-              tag: 'Conferência',
-              completedAt: null,
-              dateStr: todayBR,
-            };
-            nextTasks = [autoTask, ...prev.tasks];
-          }
-        }
-
-        const nextState: KishiState = {
-          ...prev,
-          channels: {
-            ...prev.channels,
-            [target.folder]: {
-              ...prev.channels[target.folder],
-              [target.listKey]: nextList,
-            },
-          },
-          tasks: nextTasks,
-        };
-
-        const currentUid = authUserRef.current?.uid;
-        void persistKishiState(nextState, currentUid);
-        if (currentUid && authUserRef.current?.emailVerified && cloudDocReadyRef.current) {
-          try {
-            lastCloudHashRef.current = JSON.stringify(normalizeKishiState(nextState));
-          } catch {
-            // ignore
-          }
-          void updateWorkspaceDoc(currentUid, nextState).catch((err) => {
-            console.error('Erro ao salvar atualização de canal na nuvem:', err);
+      for (const folder of folders) {
+        for (const listKey of listKeys) {
+          current.channels[folder][listKey].forEach((ch, idx) => {
+            if (!ch.watchChanges) return;
+            const targetUrl = (ch.monitorSheetUrl || ch.url || '').trim();
+            if (isGoogleSheetsUrl(targetUrl)) {
+              targets.push({
+                folder,
+                listKey,
+                index: idx,
+                channel: ch,
+                sheetUrl: targetUrl,
+              });
+            }
           });
         }
-        return nextState;
-      });
-
-      if (!isInitialBaseline) {
-        setSheetAlerts((prev) => [
-          {
-            id: `ch_alert_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`,
-            title: latestChannel.name,
-            kind: 'channel',
-            timeFormatted: timeNow,
-            unread: true,
-          },
-          ...prev.slice(0, 19),
-        ]);
-        showToast(
-          `O plano de ${latestChannel.name} está atualizado! Adicionado às Tarefas do Dia.`,
-        );
       }
-    }
-  }, [showToast]);
+
+      if (targets.length === 0) return;
+
+      for (const target of targets) {
+        const res = await syncGoogleSheetUrl(target.sheetUrl);
+        if (!res.ok || !res.csv) continue;
+
+        const nextHash = await hashNormalizedCsv(res.csv);
+        const latestChannel =
+          stateRef.current.channels[target.folder][target.listKey][target.index];
+        if (!latestChannel || latestChannel.name !== target.channel.name) continue;
+
+        const cacheKey = `${target.folder}:${target.listKey}:${target.channel.name.toLowerCase()}`;
+        const prevHash = inMemoryChannelHashRef.current[cacheKey] || latestChannel.lastCsvHash;
+        if (prevHash === nextHash) {
+          inMemoryChannelHashRef.current[cacheKey] = nextHash;
+          continue;
+        }
+
+        inMemoryChannelHashRef.current[cacheKey] = nextHash;
+        const timeNow = getFormattedTimeNow();
+        const todayBR = getFormattedToday();
+        const todayISO = getBrasiliaTodayISO();
+        const syncStamp = `${todayBR} às ${timeNow}`;
+        const isInitialBaseline = !prevHash;
+
+        setState((prev) => {
+          const list = prev.channels[target.folder][target.listKey];
+          const chItem = list[target.index];
+          if (!chItem || chItem.name !== target.channel.name) return prev;
+
+          const nextList = list.map((item, idx) =>
+            idx === target.index
+              ? { ...item, lastCsvHash: nextHash, lastSyncedAt: syncStamp }
+              : item,
+          );
+
+          let nextTasks = prev.tasks;
+          if (!isInitialBaseline) {
+            const expectedTitle = `Plano atualizado: ${chItem.name}`;
+            const alreadyPendingToday = prev.tasks.some(
+              (t) =>
+                t.status !== 'concluido' &&
+                t.channelName.toLowerCase() === chItem.name.toLowerCase() &&
+                (t.title === expectedTitle ||
+                  t.title.startsWith('Plano atualizado:') ||
+                  t.title.startsWith('Conferir plano atualizado:')),
+            );
+            if (!alreadyPendingToday) {
+              const autoTask: KishiTask = {
+                id: `TK-${Date.now()}-${Math.random().toString(36).slice(2, 5)}`,
+                product: target.folder === 'food' ? '99 Food' : '99 Rides',
+                subBrand: '',
+                channelType: chItem.type,
+                channelName: chItem.name,
+                title: expectedTitle,
+                status: 'afazer',
+                frequency: 'Pontual',
+                scheduledDate: todayISO,
+                completedAt: null,
+                dateStr: todayBR,
+              };
+              nextTasks = [autoTask, ...prev.tasks];
+            }
+          }
+
+          const nextState: KishiState = {
+            ...prev,
+            channels: {
+              ...prev.channels,
+              [target.folder]: {
+                ...prev.channels[target.folder],
+                [target.listKey]: nextList,
+              },
+            },
+            tasks: nextTasks,
+          };
+
+          const currentUid = authUserRef.current?.uid;
+          void persistKishiState(nextState, currentUid);
+          if (currentUid && authUserRef.current?.emailVerified && cloudDocReadyRef.current) {
+            try {
+              lastCloudHashRef.current = JSON.stringify(normalizeKishiState(nextState));
+            } catch {
+              // ignore
+            }
+            void updateWorkspaceDoc(currentUid, nextState).catch((err) => {
+              console.error('Erro ao salvar atualização de canal na nuvem:', err);
+            });
+          }
+          return nextState;
+        });
+
+        if (!isInitialBaseline) {
+          pushUniqueSheetAlert(latestChannel.name, 'channel', timeNow, true);
+        }
+      }
+    },
+    [pushUniqueSheetAlert],
+  );
+
+  const syncMonitoredSheets = useCallback(
+    async (force = false) => {
+      const now = Date.now();
+      if (!force && now - lastSheetMetaPollAtRef.current < 120_000) {
+        return;
+      }
+      lastSheetMetaPollAtRef.current = now;
+
+      const monitored = stateRef.current.sheets.filter(
+        (sh) =>
+          sh.type === 'link' &&
+          sh.autoSyncMeta !== false &&
+          (sh.url.startsWith('https://docs.google.com/') ||
+            sh.url.startsWith('https://drive.google.com/')),
+      );
+      if (monitored.length === 0) return;
+
+      for (const sheet of monitored) {
+        let fetchedTitle: string | undefined;
+        let fetchedCategory: '99' | '99 Rides' | '99 Food' | undefined;
+        let fetchedKind = detectResourceKind(sheet.url, sheet.type, sheet.resourceKind);
+
+        if (isGoogleSheetsUrl(sheet.url)) {
+          const res = await syncGoogleSheetUrl(sheet.url);
+          if (!res.ok) continue;
+          fetchedTitle = res.docTitle?.trim();
+          fetchedCategory = res.detectedCategory;
+          fetchedKind = 'planilha';
+        } else {
+          const meta = await inspectGoogleResourceLink(sheet.url);
+          fetchedTitle = meta.title?.trim();
+          fetchedCategory = meta.category;
+          fetchedKind = meta.resourceKind;
+        }
+
+        if (!fetchedTitle && !fetchedCategory) continue;
+
+        const latestSheet = stateRef.current.sheets.find((s) => s.id === sheet.id);
+        if (!latestSheet) continue;
+
+        const isInitialBaseline = !latestSheet.lastSheetTitle && Boolean(fetchedTitle);
+        const titleChanged = Boolean(
+          fetchedTitle && latestSheet.lastSheetTitle && fetchedTitle !== latestSheet.lastSheetTitle,
+        );
+        const categoryChanged = Boolean(
+          fetchedCategory &&
+            fetchedCategory !== latestSheet.category &&
+            (titleChanged ||
+              (latestSheet.category === '99' &&
+                (fetchedCategory === '99 Food' || fetchedCategory === '99 Rides'))),
+        );
+        const kindChanged = fetchedKind !== (latestSheet.resourceKind || 'planilha');
+
+        if (!isInitialBaseline && !titleChanged && !categoryChanged && !kindChanged) {
+          continue;
+        }
+
+        const timeNow = getFormattedTimeNow();
+        const syncStamp = `${getFormattedToday()} às ${timeNow}`;
+        const finalName = titleChanged && fetchedTitle ? fetchedTitle : latestSheet.name;
+        const finalCategory =
+          categoryChanged && fetchedCategory ? fetchedCategory : latestSheet.category;
+
+        setState((prev) => {
+          const currentSheet = prev.sheets.find((s) => s.id === sheet.id);
+          if (!currentSheet) return prev;
+          const nextState: KishiState = {
+            ...prev,
+            sheets: prev.sheets.map((s) =>
+              s.id === sheet.id
+                ? {
+                    ...s,
+                    name: titleChanged && fetchedTitle ? fetchedTitle : s.name,
+                    category: categoryChanged && fetchedCategory ? fetchedCategory : s.category,
+                    resourceKind: fetchedKind,
+                    note: getResourceKindMeta(fetchedKind).label,
+                    lastSheetTitle: fetchedTitle || s.lastSheetTitle,
+                    lastSyncedAt: syncStamp,
+                  }
+                : s,
+            ),
+          };
+          const currentUid = authUserRef.current?.uid;
+          void persistKishiState(nextState, currentUid);
+          if (currentUid && authUserRef.current?.emailVerified && cloudDocReadyRef.current) {
+            try {
+              lastCloudHashRef.current = JSON.stringify(normalizeKishiState(nextState));
+            } catch {
+              // ignore
+            }
+            void updateWorkspaceDoc(currentUid, nextState).catch((err) => {
+              console.error('Erro ao salvar atualização de arquivo na nuvem:', err);
+            });
+          }
+          return nextState;
+        });
+
+        if (titleChanged || categoryChanged) {
+          pushUniqueSheetAlert(
+            `${finalName}${categoryChanged ? ` (${finalCategory})` : ''}`,
+            'campaign',
+            timeNow,
+            true,
+          );
+        }
+      }
+    },
+    [pushUniqueSheetAlert],
+  );
 
   const syncAllLinkedCampaigns = useCallback(
     async (silent: boolean) => {
@@ -808,8 +1042,17 @@ export default function App() {
             stateRef.current.channels[folder][listKey].some((ch) => Boolean(ch.watchChanges)),
           ),
         );
+      const hasAutoMetaSheets =
+        silent &&
+        stateRef.current.sheets.some(
+          (sh) =>
+            sh.type === 'link' &&
+            sh.autoSyncMeta !== false &&
+            (sh.url.startsWith('https://docs.google.com/') ||
+              sh.url.startsWith('https://drive.google.com/')),
+        );
 
-      if (linked.length === 0 && !hasWatchedChannels) return;
+      if (linked.length === 0 && !hasWatchedChannels && !hasAutoMetaSheets) return;
 
       syncInFlightRef.current = true;
       lastAutoSyncAtRef.current = Date.now();
@@ -820,11 +1063,14 @@ export default function App() {
         if (hasWatchedChannels) {
           await syncMonitoredChannels();
         }
+        if (hasAutoMetaSheets) {
+          await syncMonitoredSheets();
+        }
       } finally {
         syncInFlightRef.current = false;
       }
     },
-    [syncCampaignById, syncMonitoredChannels],
+    [syncCampaignById, syncMonitoredChannels, syncMonitoredSheets],
   );
 
   useEffect(() => {
@@ -867,16 +1113,41 @@ export default function App() {
     return () => window.removeEventListener('hashchange', onHashChange);
   }, []);
 
+  // Check for pending waves due today or overdue once per wave per session
+  useEffect(() => {
+    if (!isLoaded) return;
+    const timeNow = getFormattedTimeNow();
+    for (const camp of state.activeCampaigns) {
+      for (const wave of camp.waves) {
+        if (wave.status !== 'nao_extraido') continue;
+        const dueState = getWaveDueState(wave.startDate, wave.endDate, wave.status);
+        if (dueState === 'normal') continue;
+        const key = `${camp.id}:${wave.id}:${dueState}`;
+        if (alertedDueWavesRef.current.has(key)) continue;
+        alertedDueWavesRef.current.add(key);
+        pushUniqueSheetAlert(
+          `${camp.name} · ${wave.planTitle} (${dueState === 'overdue' ? 'Atrasado' : 'Vence hoje'})`,
+          'campaign',
+          timeNow,
+          true,
+        );
+      }
+    }
+  }, [isLoaded, state.activeCampaigns, pushUniqueSheetAlert]);
+
   // Outside click to close search & profile menus
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
-      if (searchBoxRef.current && !searchBoxRef.current.contains(e.target as Node)) {
+      const target = e.target as Node;
+      const insideDesktopSearch = searchBoxRef.current?.contains(target) ?? false;
+      const insideMobileSearch = mobileSearchBoxRef.current?.contains(target) ?? false;
+      if (!insideDesktopSearch && !insideMobileSearch) {
         setSearchQuery('');
       }
-      if (profileBoxRef.current && !profileBoxRef.current.contains(e.target as Node)) {
+      if (profileBoxRef.current && !profileBoxRef.current.contains(target)) {
         setProfileMenuOpen(false);
       }
-      if (alertsBoxRef.current && !alertsBoxRef.current.contains(e.target as Node)) {
+      if (alertsBoxRef.current && !alertsBoxRef.current.contains(target)) {
         setAlertsMenuOpen(false);
       }
     };
@@ -986,6 +1257,7 @@ export default function App() {
           ? [
               {
                 id: `HIST-${Date.now()}`,
+                taskId: payload.id,
                 dateStr: today,
                 title: payload.title,
                 product: payload.product,
@@ -1028,6 +1300,7 @@ export default function App() {
             ? [
                 {
                   id: `HIST-${Date.now()}`,
+                  taskId: newTask.id,
                   dateStr: today,
                   title: payload.title,
                   product: payload.product,
@@ -1048,22 +1321,75 @@ export default function App() {
     setEditingTask(null);
   }
 
+  function markChannelVerifiedFromTask(
+    prevChannels: KishiState['channels'],
+    taskTitle: string,
+    channelName: string,
+    stamp: string,
+  ): { nextChannels: KishiState['channels']; matchedChannelName: string | null } {
+    const cleanTitle = taskTitle.trim().toLowerCase();
+    const isAutoCheckTask =
+      cleanTitle.startsWith('plano atualizado:') ||
+      cleanTitle.startsWith('conferir plano atualizado:');
+    if (!isAutoCheckTask || !channelName.trim()) {
+      return { nextChannels: prevChannels, matchedChannelName: null };
+    }
+
+    const targetLower = channelName.trim().toLowerCase();
+    let matchedName: string | null = null;
+
+    const patchList = (list: KishiChannel[]) =>
+      list.map((ch) => {
+        if (ch.name.trim().toLowerCase() === targetLower) {
+          matchedName = ch.name;
+          return { ...ch, lastVerifiedAt: stamp };
+        }
+        return ch;
+      });
+
+    const nextChannels: KishiState['channels'] = {
+      rides: {
+        ...prevChannels.rides,
+        internos: patchList(prevChannels.rides.internos),
+        externos: patchList(prevChannels.rides.externos),
+      },
+      food: {
+        ...prevChannels.food,
+        internos: patchList(prevChannels.food.internos),
+        externos: patchList(prevChannels.food.externos),
+      },
+    };
+
+    return { nextChannels, matchedChannelName: matchedName };
+  }
+
   function handleCompleteTask(taskId: string) {
     const nowTime = getFormattedTimeNow();
     const today = getFormattedToday();
+    const stamp = `${today} às ${nowTime}`;
+    const currentTask = stateRef.current.tasks.find((t) => t.id === taskId);
 
     commitState((prev) => {
       const task = prev.tasks.find((t) => t.id === taskId);
       if (!task) return prev;
 
+      const { nextChannels } = markChannelVerifiedFromTask(
+        prev.channels,
+        task.title,
+        task.channelName,
+        stamp,
+      );
+
       return {
         ...prev,
+        channels: nextChannels,
         tasks: prev.tasks.map((t) =>
           t.id === taskId ? { ...t, status: 'concluido', completedAt: nowTime } : t,
         ),
         history: [
           {
             id: `HIST-${Date.now()}`,
+            taskId: task.id,
             dateStr: today,
             title: task.title,
             product: task.product,
@@ -1077,6 +1403,25 @@ export default function App() {
         ],
       };
     });
+
+    if (
+      currentTask &&
+      currentTask.channelName &&
+      (currentTask.title.toLowerCase().startsWith('plano atualizado:') ||
+        currentTask.title.toLowerCase().startsWith('conferir plano atualizado:'))
+    ) {
+      const chLower = currentTask.channelName.trim().toLowerCase();
+      setSheetAlerts((alerts) =>
+        alerts.map((a) =>
+          a.kind === 'channel' && a.title.trim().toLowerCase() === chLower
+            ? { ...a, unread: false }
+            : a,
+        ),
+      );
+      showToast(`Conferência de ${currentTask.channelName} concluída às ${nowTime}!`);
+      return;
+    }
+
     showToast(`Tarefa concluída às ${nowTime}!`);
   }
 
@@ -1103,14 +1448,20 @@ export default function App() {
 
     const nowTime = getFormattedTimeNow();
     const today = getFormattedToday();
+    const stamp = `${today} às ${nowTime}`;
+    const becameDone = targetStatus === 'concluido';
 
     commitState((prev) => {
       const target = prev.tasks.find((t) => t.id === taskId);
       if (!target || target.status === targetStatus) return prev;
 
-      const becameDone = targetStatus === 'concluido';
+      const { nextChannels } = becameDone
+        ? markChannelVerifiedFromTask(prev.channels, target.title, target.channelName, stamp)
+        : { nextChannels: prev.channels };
+
       return {
         ...prev,
+        channels: nextChannels,
         tasks: prev.tasks.map((t) =>
           t.id === taskId
             ? {
@@ -1125,6 +1476,7 @@ export default function App() {
             ? [
                 {
                   id: `HIST-${Date.now()}`,
+                  taskId: target.id,
                   dateStr: today,
                   title: target.title,
                   product: target.product,
@@ -1139,6 +1491,22 @@ export default function App() {
             : prev.history,
       };
     });
+
+    if (
+      becameDone &&
+      task.channelName &&
+      (task.title.toLowerCase().startsWith('plano atualizado:') ||
+        task.title.toLowerCase().startsWith('conferir plano atualizado:'))
+    ) {
+      const chLower = task.channelName.trim().toLowerCase();
+      setSheetAlerts((alerts) =>
+        alerts.map((a) =>
+          a.kind === 'channel' && a.title.trim().toLowerCase() === chLower
+            ? { ...a, unread: false }
+            : a,
+        ),
+      );
+    }
 
     const statusName =
       targetStatus === 'afazer'
@@ -1179,6 +1547,7 @@ export default function App() {
           name: file.name,
           category,
           type: 'file' as const,
+          resourceKind: detectResourceKind(file.name, 'file'),
           url: result.url,
           note: result.note,
         };
@@ -1259,8 +1628,11 @@ export default function App() {
     name: string;
     url: string;
     category: string;
+    resourceKind: SheetResourceKind;
     color?: string;
     obs?: string;
+    autoSyncMeta?: boolean;
+    lastSheetTitle?: string;
   }) {
     if (payload.id) {
       commitState((prev) => ({
@@ -1272,13 +1644,16 @@ export default function App() {
                 name: payload.name,
                 url: payload.url,
                 category: payload.category,
+                resourceKind: payload.resourceKind,
                 color: payload.color,
                 obs: payload.obs,
+                autoSyncMeta: payload.autoSyncMeta,
+                lastSheetTitle: payload.lastSheetTitle ?? s.lastSheetTitle,
               }
             : s,
         ),
       }));
-      showToast('Planilha atualizada!');
+      showToast('Item atualizado!');
     } else {
       commitState((prev) => ({
         ...prev,
@@ -1288,10 +1663,13 @@ export default function App() {
             name: payload.name,
             category: payload.category,
             type: 'link',
+            resourceKind: payload.resourceKind,
             url: payload.url,
-            note: 'Planilha / Link Salvo',
+            note: getResourceKindMeta(payload.resourceKind).label,
             color: payload.color,
             obs: payload.obs,
+            autoSyncMeta: payload.autoSyncMeta,
+            lastSheetTitle: payload.lastSheetTitle,
           },
           ...prev.sheets,
         ],
@@ -1473,8 +1851,12 @@ export default function App() {
     });
 
     if (payload.watchChanges) {
+      const targetListKey = payload.type === 'Interno' ? 'internos' : 'externos';
+      delete inMemoryChannelHashRef.current[
+        `${payload.folder}:${targetListKey}:${payload.name.toLowerCase()}`
+      ];
       window.setTimeout(() => {
-        void syncMonitoredChannels();
+        void syncMonitoredChannels(true);
       }, 250);
     }
 
@@ -1519,6 +1901,7 @@ export default function App() {
     sheetUrl: string;
     autoSync: boolean;
     notes: string;
+    lastSheetTitle?: string;
     importedRows?: ParsedSheetRow[] | null;
     replaceWithImported?: boolean;
   }) {
@@ -1541,6 +1924,7 @@ export default function App() {
             front: payload.front,
             sheetUrl: payload.sheetUrl || undefined,
             autoSync: Boolean(payload.sheetUrl) && payload.autoSync,
+            lastSheetTitle: payload.lastSheetTitle ?? c.lastSheetTitle,
             lastSyncedAt:
               payload.importedRows && payload.importedRows.length > 0
                 ? syncStamp
@@ -1563,6 +1947,7 @@ export default function App() {
         front: payload.front,
         sheetUrl: payload.sheetUrl || undefined,
         autoSync: Boolean(payload.sheetUrl) && payload.autoSync,
+        lastSheetTitle: payload.lastSheetTitle,
         lastSyncedAt: initialWaves.length > 0 ? syncStamp : undefined,
         notes: payload.notes || undefined,
         waves: initialWaves,
@@ -1787,42 +2172,85 @@ export default function App() {
 
   // History handlers
   function handleRestoreHistory(historyId: string) {
-    const item = state.history.find((h) => h.id === historyId);
-    if (!item) return;
+    const today = getFormattedToday();
 
-    const restoredTask: KishiTask = {
-      id: `TK-${Date.now()}`,
-      product:
-        item.product === '99 Rides' || item.product === '99 Food' || item.product === 'Geral'
-          ? item.product
-          : '99 Rides',
-      subBrand: item.subBrand || 'PAX',
-      channelType:
-        item.channelType === 'Externo' ||
-        item.channelType === 'Interno' ||
-        item.channelType === 'Nenhum'
-          ? item.channelType
-          : 'Externo',
-      channelName: item.channelName === 'Geral' ? '' : item.channelName || '',
-      title: item.title,
-      status: 'afazer',
-      frequency:
-        item.frequency === 'Diária' ||
-        item.frequency === 'Semanal' ||
-        item.frequency === 'Mensal' ||
-        item.frequency === 'Pontual'
-          ? item.frequency
-          : 'Diária',
-      completedAt: null,
-      dateStr: getFormattedToday(),
-    };
+    commitState((prev) => {
+      const item = prev.history.find((h) => h.id === historyId);
+      if (!item) return prev;
 
-    commitState((prev) => ({
-      ...prev,
-      tasks: [restoredTask, ...prev.tasks],
-      history: prev.history.filter((h) => h.id !== historyId),
-    }));
-    showToast('Tarefa restaurada para o checklist do dia!');
+      const norm = (val?: string) => (val || '').trim().toLowerCase();
+      const itemTitle = norm(item.title);
+      const itemChannel = item.channelName === 'Geral' ? '' : norm(item.channelName);
+
+      // Locate existing completed task in Kanban/Tasks so we move it back instead of duplicating
+      const matchedTask =
+        (item.taskId ? prev.tasks.find((t) => t.id === item.taskId) : undefined) ||
+        prev.tasks.find(
+          (t) =>
+            t.status === 'concluido' &&
+            norm(t.title) === itemTitle &&
+            norm(t.product) === norm(item.product) &&
+            norm(t.channelName) === itemChannel &&
+            t.completedAt === item.time,
+        ) ||
+        prev.tasks.find(
+          (t) =>
+            t.status === 'concluido' &&
+            norm(t.title) === itemTitle &&
+            norm(t.product) === norm(item.product) &&
+            norm(t.channelName) === itemChannel,
+        ) ||
+        prev.tasks.find((t) => t.status === 'concluido' && norm(t.title) === itemTitle);
+
+      let nextTasks: KishiTask[];
+      if (matchedTask) {
+        nextTasks = prev.tasks.map((t) =>
+          t.id === matchedTask.id
+            ? {
+                ...t,
+                status: 'afazer',
+                completedAt: null,
+                dateStr: today,
+              }
+            : t,
+        );
+      } else {
+        const restoredTask: KishiTask = {
+          id: `TK-${Date.now()}`,
+          product:
+            item.product === '99 Rides' || item.product === '99 Food' || item.product === 'Geral'
+              ? item.product
+              : '99 Rides',
+          subBrand: item.subBrand || 'PAX',
+          channelType:
+            item.channelType === 'Externo' ||
+            item.channelType === 'Interno' ||
+            item.channelType === 'Nenhum'
+              ? item.channelType
+              : 'Externo',
+          channelName: item.channelName === 'Geral' ? '' : item.channelName || '',
+          title: item.title,
+          status: 'afazer',
+          frequency:
+            item.frequency === 'Diária' ||
+            item.frequency === 'Semanal' ||
+            item.frequency === 'Mensal' ||
+            item.frequency === 'Pontual'
+              ? item.frequency
+              : 'Diária',
+          completedAt: null,
+          dateStr: today,
+        };
+        nextTasks = [restoredTask, ...prev.tasks];
+      }
+
+      return {
+        ...prev,
+        tasks: nextTasks,
+        history: prev.history.filter((h) => h.id !== historyId),
+      };
+    });
+    showToast('Tarefa restaurada para A Fazer!');
   }
 
   function handleRemoveHistory(historyId: string) {
@@ -1957,9 +2385,9 @@ export default function App() {
     'visao-geral': 'Hoje',
     campanhas: 'Campanhas',
     'pastas-99': '99',
-    kanban: 'Kanban',
+    kanban: 'Quadro',
     historico: 'Histórico',
-    chatbot: 'ChatDot',
+    chatbot: 'Dot',
   };
 
   const resolvedTimeBank: KishiTimeBank = state.timeBank ?? {
@@ -2006,11 +2434,16 @@ export default function App() {
         <div className="flex items-center gap-2 md:gap-4 shrink-0">
           <button
             type="button"
-            onClick={() => navigate('visao-geral')}
+            onClick={(e) => {
+              const rect = e.currentTarget.getBoundingClientRect();
+              triggerAntScurry(rect.left + rect.width * 0.35, rect.top + rect.height * 0.5, 2);
+              navigate('visao-geral');
+            }}
             className="flex items-center gap-2 md:gap-3 focus:outline-none group cursor-pointer"
           >
-            <div className="brand-logo-container h-9 w-9 md:h-11 md:w-11 rounded-xl bg-[#151d18] border border-[#777F89]/60 flex items-center justify-center">
+            <div className="brand-logo-container relative h-9 w-9 md:h-11 md:w-11 rounded-xl bg-[#151d18] border border-[#777F89]/60 flex items-center justify-center">
               <KishiLogoSvg className="h-5 w-5 md:h-7 md:w-7 text-[#C5A66B]" />
+              <RealisticMicroAntSvg className="w-2.5 h-2.5 text-[#C5A66B]/60 absolute -top-1 -right-1 pointer-events-none rotate-[28deg]" />
             </div>
             <span className="font-extrabold text-base md:text-xl tracking-[0.18em] md:tracking-[0.25em] text-[#EDE9DE] font-['Montserrat',sans-serif] group-hover:text-[#C5A66B] transition-colors whitespace-nowrap shrink-0">
               KISHI
@@ -2023,8 +2456,8 @@ export default function App() {
           </div>
         </div>
 
-        {/* Barra de Pesquisa */}
-        <div ref={searchBoxRef} className="flex-1 max-w-md mx-2 md:mx-6 relative">
+        {/* Barra de Pesquisa Desktop */}
+        <div ref={searchBoxRef} className="hidden md:block flex-1 max-w-md mx-6 relative">
           <Search className="w-3.5 h-3.5 text-[#A9B99D] absolute left-3.5 top-2.5 pointer-events-none" />
           <input
             type="text"
@@ -2073,24 +2506,38 @@ export default function App() {
                 </a>
               ))}
 
-              {searchResults.sheets.map((s) => (
-                <a
-                  key={s.id}
-                  href={s.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={() => setSearchQuery('')}
-                  className="p-2 hover:bg-[#0b100d] rounded-lg cursor-pointer flex justify-between items-center gap-2"
-                >
-                  <span className="text-[#C5A66B] flex items-center gap-1.5 truncate">
-                    <Table2 className="w-3.5 h-3.5 shrink-0" />
-                    <span className="truncate">{s.name}</span>
-                  </span>
-                  <span className="text-[#A9B99D] text-[11px] font-mono shrink-0">
-                    {s.category}
-                  </span>
-                </a>
-              ))}
+              {searchResults.sheets.map((s) => {
+                const kind = detectResourceKind(s.url, s.type, s.resourceKind);
+                const kindMeta = getResourceKindMeta(kind);
+                return (
+                  <a
+                    key={s.id}
+                    href={s.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    onClick={() => setSearchQuery('')}
+                    className="p-2 hover:bg-[#0b100d] rounded-lg cursor-pointer flex justify-between items-center gap-2"
+                  >
+                    <span className="text-[#C5A66B] flex items-center gap-1.5 truncate">
+                      {kind === 'drive' ? (
+                        <FolderOpen className="w-3.5 h-3.5 text-amber-300 shrink-0" />
+                      ) : kind === 'doc' ? (
+                        <FileText className="w-3.5 h-3.5 text-sky-300 shrink-0" />
+                      ) : kind === 'apresentacao' ? (
+                        <Presentation className="w-3.5 h-3.5 text-orange-300 shrink-0" />
+                      ) : kind === 'arquivo' ? (
+                        <FileSpreadsheet className="w-3.5 h-3.5 text-violet-300 shrink-0" />
+                      ) : (
+                        <Table2 className="w-3.5 h-3.5 text-emerald-300 shrink-0" />
+                      )}
+                      <span className="truncate">{s.name}</span>
+                    </span>
+                    <span className="text-[#A9B99D] text-[11px] font-mono shrink-0">
+                      {kindMeta.label} · {s.category}
+                    </span>
+                  </a>
+                );
+              })}
 
               {searchResults.channels.map(({ folder, channel }, idx) => (
                 <a
@@ -2136,8 +2583,25 @@ export default function App() {
           )}
         </div>
 
-        {/* Ações direita: Alertas + Perfil */}
+        {/* Ações direita: Busca Mobile + Alertas + Perfil */}
         <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={() => {
+              setMobileSearchOpen((v) => !v);
+              setAlertsMenuOpen(false);
+              setProfileMenuOpen(false);
+            }}
+            className={`md:hidden btn-press h-9 w-9 rounded-full border flex items-center justify-center focus:outline-none cursor-pointer transition ${
+              mobileSearchOpen
+                ? 'bg-[#C5A66B]/15 border-[#C5A66B]/70 text-[#C5A66B]'
+                : 'bg-[#151d18] border-[#777F89]/50 text-[#EDE9DE]'
+            }`}
+            aria-label="Abrir busca"
+          >
+            {mobileSearchOpen ? <X className="w-4 h-4" /> : <Search className="w-4 h-4 text-[#A9B99D]" />}
+          </button>
+
           {/* Alertas de atualização de planilha */}
           <div ref={alertsBoxRef} className="relative shrink-0">
             <button
@@ -2169,7 +2633,7 @@ export default function App() {
             {alertsMenuOpen && (
               <div className="absolute right-0 top-11 w-72 bg-[#151d18] border border-[#777F89]/60 rounded-2xl p-3 z-50 shadow-2xl space-y-2 text-xs">
                 <div className="flex items-center justify-between pb-2 border-b border-[#777F89]/40">
-                  <span className="font-bold text-[#EDE9DE]">Atualizações de Planilha</span>
+                  <span className="font-bold text-[#EDE9DE]">Atualizações</span>
                   {sheetAlerts.length > 0 && (
                     <button
                       type="button"
@@ -2183,26 +2647,26 @@ export default function App() {
 
                 {sheetAlerts.length === 0 ? (
                   <p className="py-3 text-center text-[11px] text-[#A9B99D]">
-                    Nenhuma alteração recente nas planilhas.
+                    Nenhuma alteração recente.
                   </p>
                 ) : (
                   <div className="max-h-64 overflow-y-auto space-y-1.5 pr-0.5">
                     {sheetAlerts.map((alert) => (
                       <div
                         key={alert.id}
-                        className="p-2 rounded-xl bg-[#0b100d] border border-[#777F89]/30 flex items-start gap-2"
+                        className="p-2 rounded-xl bg-[#0b100d] border border-[#777F89]/30 flex items-center gap-2"
                       >
-                        <span className="text-[10px] font-mono font-bold text-[#C5A66B] shrink-0 mt-0.5">
+                        <span className="text-[10px] font-mono font-bold text-[#C5A66B] shrink-0">
                           {alert.timeFormatted}
                         </span>
                         <span className="text-[11px] text-[#EDE9DE] leading-snug">
                           {alert.kind === 'channel' ? (
                             <>
-                              O plano de <strong className="text-[#C5A66B]">{alert.title}</strong> está atualizado — tarefa adicionada ao dia.
+                              Plano de <strong className="text-[#C5A66B]">{alert.title}</strong> atualizado
                             </>
                           ) : (
                             <>
-                              Planilha <strong className="text-[#EDE9DE]">{alert.title}</strong> foi atualizada com alteração.
+                              <strong className="text-[#EDE9DE]">{alert.title}</strong> atualizada
                             </>
                           )}
                         </span>
@@ -2326,17 +2790,140 @@ export default function App() {
         </div>
       </header>
 
-      {/* SUB-BARRA MOBILE COM DATA E PROGRESSO (OCULTA NO PC) */}
-      <div className="md:hidden flex items-center justify-between gap-2 px-3.5 py-1.5 bg-[#0b100d]/85 border-b border-[#777F89]/30 text-[11px] shrink-0">
-        <div className="flex items-center gap-1.5 text-[#EDE9DE] truncate">
-          <Calendar className="w-3 h-3 text-[#C5A66B] shrink-0" />
-          <span className="font-medium truncate tabular-nums">{dateHeader}</span>
+      {/* BUSCA MOBILE EXPANSÍVEL */}
+      {mobileSearchOpen && (
+        <div
+          ref={mobileSearchBoxRef}
+          className="md:hidden px-3 py-2 bg-[#0b100d] border-b border-[#777F89]/40 relative z-30 shrink-0"
+        >
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 text-[#A9B99D] absolute left-3 top-2.5 pointer-events-none" />
+            <input
+              type="text"
+              autoFocus
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Buscar tarefas, canais, planilhas..."
+              className="w-full bg-[#151d18] border border-[#777F89]/60 rounded-xl pl-9 pr-8 py-1.5 text-xs text-[#EDE9DE] placeholder-[#777F89] focus:outline-none focus:border-[#C5A66B] transition"
+              aria-label="Buscar no celular"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                className="absolute right-2.5 top-2 text-[#A9B99D] hover:text-[#EDE9DE] cursor-pointer"
+                aria-label="Limpar busca"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+
+          {searchResults && (
+            <div className="mt-2 bg-[#151d18] border border-[#777F89]/60 rounded-xl p-2 shadow-2xl space-y-1 text-xs max-h-60 overflow-y-auto">
+              {searchResults.tasks.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => {
+                    navigate('kanban');
+                    setEditingTask(t);
+                    setTaskModalOpen(true);
+                    setSearchQuery('');
+                    setMobileSearchOpen(false);
+                  }}
+                  className="w-full text-left p-2 hover:bg-[#0b100d] rounded-lg cursor-pointer flex justify-between items-center gap-2"
+                >
+                  <span className="text-[#EDE9DE] truncate">{t.title}</span>
+                  <span className="text-[#C5A66B] text-[11px] font-mono shrink-0">{t.product}</span>
+                </button>
+              ))}
+
+              {searchResults.portals.map((p) => (
+                <a
+                  key={p.id}
+                  href={p.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => {
+                    setSearchQuery('');
+                    setMobileSearchOpen(false);
+                  }}
+                  className="p-2 hover:bg-[#0b100d] rounded-lg cursor-pointer flex justify-between items-center gap-2"
+                >
+                  <span className="text-[#EDE9DE] flex items-center gap-1.5 truncate">
+                    <Globe className="w-3.5 h-3.5 text-[#C5A66B] shrink-0" />
+                    <span className="truncate">{p.name}</span>
+                  </span>
+                  <span className="text-[#A9B99D] text-[11px] font-mono shrink-0">
+                    {p.kind} · {p.category}
+                  </span>
+                </a>
+              ))}
+
+              {searchResults.sheets.map((s) => (
+                <a
+                  key={s.id}
+                  href={s.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => {
+                    setSearchQuery('');
+                    setMobileSearchOpen(false);
+                  }}
+                  className="p-2 hover:bg-[#0b100d] rounded-lg cursor-pointer flex justify-between items-center gap-2"
+                >
+                  <span className="text-[#C5A66B] truncate">{s.name}</span>
+                  <span className="text-[#A9B99D] text-[11px] font-mono shrink-0">{s.category}</span>
+                </a>
+              ))}
+
+              {searchResults.channels.map(({ folder, channel }, idx) => (
+                <a
+                  key={`${folder}-${channel.name}-${idx}`}
+                  href={channel.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => {
+                    setSearchQuery('');
+                    setMobileSearchOpen(false);
+                  }}
+                  className="p-2 hover:bg-[#0b100d] rounded-lg cursor-pointer flex justify-between items-center gap-2"
+                >
+                  <span className="text-[#EDE9DE] truncate">{channel.name}</span>
+                  <span className="text-[#A9B99D] text-[11px] font-mono shrink-0">
+                    99 {folder.toUpperCase()}
+                  </span>
+                </a>
+              ))}
+
+              {searchResults.activeCampaigns.map((camp) => (
+                <button
+                  key={camp.id}
+                  type="button"
+                  onClick={() => {
+                    navigate('campanhas');
+                    setSearchQuery('');
+                    setMobileSearchOpen(false);
+                  }}
+                  className="w-full text-left p-2 hover:bg-[#0b100d] rounded-lg cursor-pointer flex justify-between items-center gap-2"
+                >
+                  <span className="text-[#EDE9DE] truncate">{camp.name}</span>
+                  <span className="text-[#C5A66B] text-[11px] font-mono shrink-0">{camp.front}</span>
+                </button>
+              ))}
+
+              {searchResults.tasks.length === 0 &&
+                searchResults.portals.length === 0 &&
+                searchResults.sheets.length === 0 &&
+                searchResults.channels.length === 0 &&
+                searchResults.activeCampaigns.length === 0 && (
+                  <div className="p-2 text-[#A9B99D]">Nenhum item encontrado.</div>
+                )}
+            </div>
+          )}
         </div>
-        <div className="flex items-center gap-2 font-mono tabular-nums shrink-0">
-          <span className="text-[#A9B99D]">{remainingCount} pend.</span>
-          <span className="text-[#C5A66B] font-bold">{progressPct}%</span>
-        </div>
-      </div>
+      )}
 
       {/* LAYOUT PRINCIPAL */}
       <div className="flex-1 flex flex-col md:flex-row overflow-hidden min-h-0">
@@ -2373,28 +2960,45 @@ export default function App() {
             </nav>
           </div>
 
-          <div className="bg-[#151d18] border border-[#777F89]/40 rounded-2xl p-3.5 text-xs space-y-2">
-            <div className="flex items-center justify-between text-[#EDE9DE] font-semibold text-[11px]">
-              <span>Conclusão Hoje</span>
-              <span className="text-[#C5A66B] font-bold font-mono tabular-nums">
-                {progressPct}%
-              </span>
+          <div className="space-y-2">
+            <div className="bg-[#151d18] border border-[#777F89]/40 rounded-2xl p-3.5 text-xs space-y-2">
+              <div className="flex items-center justify-between text-[#EDE9DE] font-semibold text-[11px]">
+                <span>Conclusão Hoje</span>
+                <span className="text-[#C5A66B] font-bold font-mono tabular-nums">
+                  {progressPct}%
+                </span>
+              </div>
+              <div className="w-full bg-[#0b100d] h-1.5 rounded-full overflow-hidden">
+                <div
+                  className="bg-[#A9B99D] h-full rounded-full transition-all duration-300"
+                  style={{ width: `${progressPct}%` }}
+                />
+              </div>
+              <div className="flex justify-between text-[11px] text-[#A9B99D] font-mono tabular-nums">
+                <span>{remainingCount} pendentes</span>
+                <span>{doneTodayCount} concluídas</span>
+              </div>
             </div>
-            <div className="w-full bg-[#0b100d] h-1.5 rounded-full overflow-hidden">
-              <div
-                className="bg-[#A9B99D] h-full rounded-full transition-all duration-300"
-                style={{ width: `${progressPct}%` }}
-              />
-            </div>
-            <div className="flex justify-between text-[11px] text-[#A9B99D] font-mono tabular-nums">
-              <span>{remainingCount} pendentes</span>
-              <span>{doneTodayCount} concluídas</span>
+            <div className="px-2 flex items-center justify-between">
+              <SumerianGlyphWhisper glyphs="𒆧 · 𒋗 · 𒁾" />
+              <RealisticMicroAntSvg className="w-2.5 h-2.5 text-[#C5A66B]/30 -rotate-12 pointer-events-none" />
             </div>
           </div>
         </aside>
 
         {/* CONTEÚDO PRINCIPAL */}
-        <main className="flex-1 min-h-0 bg-[#0f1512] overflow-y-auto p-4 pb-24 md:p-7 md:pb-7">
+        <main className="flex-1 min-h-0 bg-[#0f1512] overflow-y-auto p-3.5 pb-24 md:p-7 md:pb-7">
+          {/* RESUMO COMPACTO MOBILE NO FLUXO DO CONTEÚDO */}
+          <div className="md:hidden mb-3.5 flex items-center justify-between gap-2 px-3 py-2 rounded-xl bg-[#0b100d] border border-[#777F89]/35 text-[11px]">
+            <div className="flex items-center gap-1.5 text-[#EDE9DE] truncate">
+              <Calendar className="w-3 h-3 text-[#C5A66B] shrink-0" />
+              <span className="font-medium truncate tabular-nums">{dateHeader}</span>
+            </div>
+            <div className="flex items-center gap-2 font-mono tabular-nums shrink-0">
+              <span className="text-[#A9B99D]">{remainingCount} pend.</span>
+              <span className="text-[#C5A66B] font-bold">{progressPct}%</span>
+            </div>
+          </div>
           {activeRoute === 'visao-geral' && (
             <OverviewModule
               userName={state.user.name}
@@ -2555,8 +3159,11 @@ export default function App() {
           {activeRoute === 'historico' && (
             <HistoryModule
               history={state.history}
+              tasks={state.tasks}
+              activeCampaigns={state.activeCampaigns}
               onRestore={handleRestoreHistory}
               onRemove={handleRemoveHistory}
+              onCopied={showToast}
             />
           )}
 
@@ -2566,7 +3173,7 @@ export default function App() {
         {/* NAVEGAÇÃO MOBILE FIXA INFERIOR (SEM ALTERAR DESKTOP) */}
         <nav
           aria-label="Navegação mobile"
-          className="md:hidden fixed bottom-0 inset-x-0 z-40 bg-[#0b100d]/95 backdrop-blur-md border-t border-[#777F89]/40 px-1.5 py-1.5 grid grid-cols-6 gap-1"
+          className="md:hidden safe-area-pb fixed bottom-0 inset-x-0 z-40 bg-[#0b100d]/95 backdrop-blur-md border-t border-[#777F89]/40 px-1.5 py-1.5 grid grid-cols-6 gap-1"
         >
           {navItems.map((item) => {
             const isActive = activeRoute === item.id;
@@ -2757,6 +3364,8 @@ export default function App() {
           </div>
         </div>
       )}
+      {/* MICRO-FORMIGAS SUTIS AO CLICAR */}
+      <AntTrailOverlay />
     </div>
   );
 }

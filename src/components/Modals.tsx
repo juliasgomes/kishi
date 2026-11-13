@@ -4,15 +4,23 @@ import {
   CheckCircle2,
   Clock,
   EyeOff,
+  FileSpreadsheet,
+  FileText,
+  FolderOpen,
   Hourglass,
   Plus,
+  Presentation,
   RefreshCw,
+  Table2,
   Tag,
   Trash2,
   X,
 } from 'lucide-react';
 import { DuplicateLinkNotice } from '@/src/components/DuplicateLinkNotice';
-import { syncGoogleSheetUrl } from '@/src/services/kishiApi';
+import {
+  inspectGoogleResourceLink,
+  syncGoogleSheetUrl,
+} from '@/src/services/kishiApi';
 import type {
   ChannelType,
   FolderKey,
@@ -27,9 +35,15 @@ import type {
   KishiTimeRule,
   KishiUser,
   ProductType,
+  SheetResourceKind,
   TaskFrequency,
   TaskStatus,
 } from '@/src/types/kishi';
+import {
+  detectResourceKind,
+  LINK_RESOURCE_KINDS,
+  suggestResourceKindFromUrl,
+} from '@/src/utils/resourceKind';
 import {
   DEFAULT_TIME_TAGS,
   estimateWorkspaceTime,
@@ -836,10 +850,17 @@ export function ChannelModal({
                   </p>
                 )}
 
-                {editing?.channel.lastSyncedAt && (
-                  <p className="text-[10px] font-mono text-[#A9B99D]">
-                    Última verificação: {editing.channel.lastSyncedAt}
-                  </p>
+                {(editing?.channel.lastSyncedAt || editing?.channel.lastVerifiedAt) && (
+                  <div className="space-y-0.5 text-[10px] font-mono text-[#A9B99D]">
+                    {editing.channel.lastSyncedAt && (
+                      <p>Última leitura da planilha: {editing.channel.lastSyncedAt}</p>
+                    )}
+                    {editing.channel.lastVerifiedAt && (
+                      <p className="text-emerald-300">
+                        Última conferência concluída: {editing.channel.lastVerifiedAt}
+                      </p>
+                    )}
+                  </div>
                 )}
 
                 {testResult && (
@@ -897,8 +918,11 @@ interface SheetLinkModalProps {
     name: string;
     url: string;
     category: string;
+    resourceKind: SheetResourceKind;
     color?: string;
     obs?: string;
+    autoSyncMeta?: boolean;
+    lastSheetTitle?: string;
   }) => void;
 }
 
@@ -914,10 +938,17 @@ export function SheetLinkModal({
   const [name, setName] = useState('');
   const [url, setUrl] = useState('');
   const [category, setCategory] = useState(defaultCategory);
+  const [resourceKind, setResourceKind] = useState<SheetResourceKind>('planilha');
+  const [kindTouched, setKindTouched] = useState(false);
   const [color, setColor] = useState('');
   const [obs, setObs] = useState('');
+  const [autoSyncMeta, setAutoSyncMeta] = useState(true);
+  const [lastSheetTitle, setLastSheetTitle] = useState<string | undefined>(undefined);
+  const [inspectingLink, setInspectingLink] = useState(false);
+  const [inspectNotice, setInspectNotice] = useState<string | null>(null);
 
   const wasOpenRef = useRef(false);
+  const lastInspectedUrlRef = useRef('');
 
   useEffect(() => {
     if (!open) {
@@ -930,15 +961,29 @@ export function SheetLinkModal({
       setName(editingSheet.name);
       setUrl(editingSheet.url);
       setCategory(editingSheet.category || defaultCategory);
+      setResourceKind(
+        detectResourceKind(editingSheet.url, editingSheet.type, editingSheet.resourceKind),
+      );
+      setKindTouched(Boolean(editingSheet.resourceKind));
       setColor(editingSheet.color || '');
       setObs(editingSheet.obs || '');
+      setAutoSyncMeta(editingSheet.autoSyncMeta !== false);
+      setLastSheetTitle(editingSheet.lastSheetTitle);
+      lastInspectedUrlRef.current = editingSheet.url;
     } else {
       setName('');
       setUrl('');
       setCategory(defaultCategory);
+      setResourceKind('planilha');
+      setKindTouched(false);
       setColor('');
       setObs('');
+      setAutoSyncMeta(true);
+      setLastSheetTitle(undefined);
+      lastInspectedUrlRef.current = '';
     }
+    setInspectingLink(false);
+    setInspectNotice(null);
   }, [open, editingSheet, defaultCategory]);
 
   const isLocalFile = editingSheet?.type === 'file';
@@ -953,6 +998,62 @@ export function SheetLinkModal({
 
   if (!open) return null;
 
+  async function pullMetaFromUrl(rawUrl: string, overwriteNameAndCategory: boolean) {
+    const trimmed = rawUrl.trim();
+    if (!trimmed || isLocalFile) return;
+    if (
+      !trimmed.startsWith('https://docs.google.com/') &&
+      !trimmed.startsWith('https://drive.google.com/')
+    ) {
+      return;
+    }
+
+    lastInspectedUrlRef.current = trimmed;
+    setInspectingLink(true);
+    setInspectNotice(null);
+    const meta = await inspectGoogleResourceLink(trimmed);
+    setInspectingLink(false);
+
+    if (!kindTouched || overwriteNameAndCategory) {
+      setResourceKind(meta.resourceKind);
+    }
+
+    if (meta.title) {
+      setLastSheetTitle(meta.title);
+      if (overwriteNameAndCategory || !name.trim()) {
+        setName(meta.title);
+      }
+    }
+
+    if (meta.category && (overwriteNameAndCategory || !editingSheet)) {
+      setCategory(meta.category);
+    }
+
+    if (meta.title) {
+      setInspectNotice(`Puxado: "${meta.title}"${meta.category ? ` · ${meta.category}` : ''}`);
+    } else if (meta.requiresAuth) {
+      setInspectNotice('Link restrito ao login corporativo: informe o nome manualmente.');
+    }
+  }
+
+  function handleUrlChange(nextUrl: string) {
+    setUrl(nextUrl);
+    setInspectNotice(null);
+    if (!kindTouched) {
+      setResourceKind(suggestResourceKindFromUrl(nextUrl));
+    }
+    const clean = nextUrl.trim();
+    if (
+      !editingSheet &&
+      clean !== lastInspectedUrlRef.current &&
+      (clean.startsWith('https://docs.google.com/') ||
+        clean.startsWith('https://drive.google.com/')) &&
+      clean.length > 35
+    ) {
+      void pullMetaFromUrl(clean, false);
+    }
+  }
+
   function handleSubmit() {
     if (!name.trim() || (!isLocalFile && !url.trim())) return;
     onSave({
@@ -960,10 +1061,36 @@ export function SheetLinkModal({
       name: name.trim(),
       url: isLocalFile ? editingSheet.url : url.trim(),
       category,
+      resourceKind,
       color: color || undefined,
       obs: obs.trim() || undefined,
+      autoSyncMeta: !isLocalFile ? autoSyncMeta : undefined,
+      lastSheetTitle,
     });
   }
+
+  function renderKindOptionIcon(kind: SheetResourceKind) {
+    switch (kind) {
+      case 'drive':
+        return <FolderOpen className="w-3.5 h-3.5 text-amber-300" />;
+      case 'doc':
+        return <FileText className="w-3.5 h-3.5 text-sky-300" />;
+      case 'apresentacao':
+        return <Presentation className="w-3.5 h-3.5 text-orange-300" />;
+      case 'arquivo':
+        return <FileSpreadsheet className="w-3.5 h-3.5 text-violet-300" />;
+      case 'planilha':
+      default:
+        return <Table2 className="w-3.5 h-3.5 text-emerald-300" />;
+    }
+  }
+
+  const kindOptions: Array<{ id: SheetResourceKind; label: string }> = isLocalFile
+    ? [
+        ...LINK_RESOURCE_KINDS,
+        { id: 'arquivo', label: 'Arquivo' },
+      ]
+    : LINK_RESOURCE_KINDS;
 
   return (
     <div
@@ -976,7 +1103,7 @@ export function SheetLinkModal({
       >
         <div className="flex justify-between items-center border-b border-[#777F89]/40 pb-3">
           <h3 className="text-sm font-bold text-[#EDE9DE]">
-            {editingSheet ? 'Editar Planilha / Arquivo' : 'Adicionar Link de Planilha'}
+            {editingSheet ? 'Editar Item Salvo' : 'Adicionar Link / Documento'}
           </h3>
           <button
             type="button"
@@ -990,37 +1117,80 @@ export function SheetLinkModal({
 
         <div className="space-y-3 text-xs">
           <div>
-            <label className="block text-[#A9B99D] mb-1 font-semibold">
-              {isLocalFile ? 'Nome do Arquivo' : 'Nome da Planilha'}
-            </label>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Ex: Planilha de Mídia - Geral 99"
-              className="w-full bg-[#0b100d] border border-[#777F89]/60 rounded-xl p-2.5 text-[#EDE9DE] placeholder-[#777F89] focus:outline-none focus:border-[#C5A66B]"
-              autoFocus
-            />
+            <label className="block text-[#A9B99D] mb-1.5 font-semibold">Tipo</label>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
+              {kindOptions.map((opt) => {
+                const selected = resourceKind === opt.id;
+                return (
+                  <button
+                    key={opt.id}
+                    type="button"
+                    onClick={() => {
+                      setResourceKind(opt.id);
+                      setKindTouched(true);
+                    }}
+                    className={`px-2 py-2 rounded-xl border text-[11px] font-semibold flex items-center justify-center gap-1.5 cursor-pointer transition ${
+                      selected
+                        ? 'bg-[#C5A66B]/20 border-[#C5A66B] text-[#EDE9DE]'
+                        : 'bg-[#0b100d] border-[#777F89]/40 text-[#A9B99D] hover:text-white'
+                    }`}
+                  >
+                    {renderKindOptionIcon(opt.id)}
+                    <span className="truncate">{opt.label}</span>
+                  </button>
+                );
+              })}
+            </div>
           </div>
 
           {!isLocalFile && (
             <div>
               <label className="block text-[#A9B99D] mb-1 font-semibold">
-                URL (Google Sheets / Drive)
+                URL (Sheets, Drive, Doc ou Apresentação)
               </label>
-              <input
-                type="url"
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleSubmit();
-                }}
-                placeholder="https://docs.google.com/spreadsheets/..."
-                className="w-full bg-[#0b100d] border border-[#777F89]/60 rounded-xl p-2.5 text-[#EDE9DE] placeholder-[#777F89] focus:outline-none focus:border-[#C5A66B]"
-              />
+              <div className="flex gap-1.5">
+                <input
+                  type="url"
+                  value={url}
+                  onChange={(e) => handleUrlChange(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') handleSubmit();
+                  }}
+                  placeholder="https://docs.google.com/... ou https://drive.google.com/..."
+                  className="flex-1 bg-[#0b100d] border border-[#777F89]/60 rounded-xl p-2.5 text-[#EDE9DE] placeholder-[#777F89] focus:outline-none focus:border-[#C5A66B]"
+                  autoFocus={!editingSheet}
+                />
+                <button
+                  type="button"
+                  disabled={!url.trim() || inspectingLink}
+                  onClick={() => void pullMetaFromUrl(url, true)}
+                  title="Puxar nome, tipo e frente direto do Google"
+                  className="btn-press px-2.5 rounded-xl bg-[#0b100d] hover:bg-[#1b251f] disabled:opacity-50 border border-[#777F89]/60 text-[11px] font-semibold text-[#C5A66B] flex items-center gap-1 shrink-0 cursor-pointer"
+                >
+                  <RefreshCw className={`w-3 h-3 ${inspectingLink ? 'animate-spin' : ''}`} />
+                  <span>{inspectingLink ? 'Lendo' : 'Puxar'}</span>
+                </button>
+              </div>
+              {inspectNotice && (
+                <p className="text-[11px] text-[#A9B99D] mt-1">{inspectNotice}</p>
+              )}
               <DuplicateLinkNotice matches={duplicateMatches} />
             </div>
           )}
+
+          <div>
+            <label className="block text-[#A9B99D] mb-1 font-semibold">
+              {isLocalFile ? 'Nome do Arquivo' : 'Nome'}
+            </label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Preenchido automaticamente ao puxar do Google ou digite aqui"
+              className="w-full bg-[#0b100d] border border-[#777F89]/60 rounded-xl p-2.5 text-[#EDE9DE] placeholder-[#777F89] focus:outline-none focus:border-[#C5A66B]"
+              autoFocus={Boolean(editingSheet)}
+            />
+          </div>
 
           <div>
             <label className="block text-[#A9B99D] mb-1 font-semibold">Frente</label>
@@ -1035,6 +1205,20 @@ export function SheetLinkModal({
               <option value="Canais Externos">Canais Externos</option>
             </select>
           </div>
+
+          {!isLocalFile && (
+            <label className="flex items-center gap-2 text-[11px] text-[#EDE9DE] bg-[#0b100d] border border-[#777F89]/40 rounded-xl p-2.5 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={autoSyncMeta}
+                onChange={(e) => setAutoSyncMeta(e.target.checked)}
+                className="h-3.5 w-3.5 rounded bg-[#151d18] accent-[#C5A66B] cursor-pointer shrink-0"
+              />
+              <span>
+                Atualizar nome e frente automaticamente se mudar na planilha
+              </span>
+            </label>
+          )}
 
           <div>
             <label className="block text-[#A9B99D] mb-1.5 font-semibold">
