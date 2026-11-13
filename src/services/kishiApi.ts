@@ -161,7 +161,8 @@ function normalizeCommonTasks(items: unknown[]): KishiCommonTask[] {
 export async function fetchKishiState(): Promise<{ state: KishiState; source: 'repo' | 'bundled' }> {
   try {
     const response = await fetch('/api/data', { cache: 'no-store' });
-    if (response.ok) {
+    const contentType = response.headers.get('content-type') || '';
+    if (response.ok && contentType.includes('application/json')) {
       const parsed = (await response.json()) as Partial<KishiState>;
       const normalized = normalizeKishiState(parsed);
       try {
