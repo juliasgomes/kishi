@@ -42,7 +42,7 @@ import {
 } from '@/src/components/Modals';
 import { LoginScreen } from '@/src/components/LoginScreen';
 import { OverviewModule } from '@/src/components/OverviewModule';
-import { OfflineIndicator, PWAInstallButton } from '@/src/components/PWAInstallButton';
+import { OfflineIndicator } from '@/src/components/PWAInstallButton';
 import {
   createWorkspaceDoc,
   reloadCurrentUser,
@@ -1764,10 +1764,8 @@ export default function App() {
           )}
         </div>
 
-        {/* Ações direita: Instalar PWA + Perfil */}
+        {/* Ações direita: Perfil */}
         <div className="flex items-center gap-2 shrink-0">
-          <PWAInstallButton compact />
-
           {/* Perfil */}
           <div ref={profileBoxRef} className="relative shrink-0">
             <button
@@ -1798,7 +1796,6 @@ export default function App() {
                     </div>
                   )}
                 </div>
-                <PWAInstallButton />
               <button
                 type="button"
                 onClick={() => {
