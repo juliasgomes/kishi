@@ -127,7 +127,7 @@ export function FoldersModule({
     }
 
     return (
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
         {items.map((portal) => {
           const front = getFrontStyle(portal.category);
           const isBoth99 = portal.category === '99';
@@ -137,26 +137,24 @@ export function FoldersModule({
               href={portal.url}
               target="_blank"
               rel="noopener noreferrer"
-              className={`interactive-card group p-3 rounded-xl bg-[#0f1512]/80 border border-[#777F89]/40 ${front.cardBorderClass} flex items-center justify-between gap-2.5 focus:outline-none`}
+              className={`interactive-card group p-3.5 rounded-xl bg-[#0f1512]/80 border border-[#777F89]/40 ${front.cardBorderClass} flex items-center justify-between gap-3 focus:outline-none`}
             >
-              <div className="flex items-center gap-2.5 min-w-0">
+              <div className="flex items-center gap-3 min-w-0">
                 <div
-                  className={`h-8 ${isBoth99 ? 'px-2' : 'w-8'} rounded-lg flex items-center justify-center shrink-0 ${front.iconBgClass}`}
+                  className={`h-9 ${isBoth99 ? 'px-2' : 'w-9'} rounded-lg flex items-center justify-center shrink-0 ${front.iconBgClass}`}
                 >
                   {renderFrontIcon(portal.category, portal.kind === 'App' ? 'app' : 'portal')}
                 </div>
                 <div className="min-w-0">
-                  <div className="flex items-center gap-1.5 text-[10px] font-mono text-[#A9B99D]">
-                    <span className={`font-bold ${front.textClass}`}>{front.label}</span>
-                    <span aria-hidden="true">·</span>
-                    <span>{portal.kind}</span>
-                  </div>
                   <h4
-                    className="text-[13px] font-bold text-[#EDE9DE] group-hover:text-[#C5A66B] transition-colors truncate mt-0.5"
+                    className="text-sm font-bold text-[#EDE9DE] group-hover:text-[#C5A66B] transition-colors truncate leading-snug"
                     title={portal.name}
                   >
                     {portal.name}
                   </h4>
+                  <p className="text-[11px] text-[#A9B99D] truncate mt-0.5">
+                    {portal.kind} · {isBoth99 ? '99' : front.label}
+                  </p>
                 </div>
               </div>
 
@@ -213,30 +211,24 @@ export function FoldersModule({
               href={sh.url}
               target="_blank"
               rel="noopener noreferrer"
-              className={`interactive-card group p-3.5 rounded-xl bg-[#0f1512]/80 border border-[#777F89]/40 ${front.cardBorderClass} flex items-start justify-between gap-2.5 focus:outline-none`}
+              className={`interactive-card group p-3.5 rounded-xl bg-[#0f1512]/80 border border-[#777F89]/40 ${front.cardBorderClass} flex items-center justify-between gap-3 focus:outline-none`}
             >
-              <div className="flex items-start gap-3 min-w-0">
+              <div className="flex items-center gap-3 min-w-0">
                 <div
-                  className={`h-9 ${isBoth99 ? 'px-2' : 'w-9'} rounded-lg flex items-center justify-center shrink-0 mt-0.5 ${front.iconBgClass}`}
+                  className={`h-9 ${isBoth99 ? 'px-2' : 'w-9'} rounded-lg flex items-center justify-center shrink-0 ${front.iconBgClass}`}
                 >
                   {renderFrontIcon(sh.category, sh.type === 'file' ? 'file' : 'sheet')}
                 </div>
                 <div className="min-w-0">
-                  <div className="flex items-center gap-1.5 text-[11px] font-mono">
-                    <span className={`font-bold ${front.textClass}`}>{front.label}</span>
-                    <span className="text-[#777F89]" aria-hidden="true">
-                      ·
-                    </span>
-                    <span className="text-[#A9B99D]">
-                      {sh.type === 'file' ? 'Arquivo' : 'Planilha'}
-                    </span>
-                  </div>
                   <h4
-                    className="text-sm font-bold text-[#EDE9DE] group-hover:text-[#C5A66B] transition-colors mt-1 leading-snug truncate"
+                    className="text-sm font-bold text-[#EDE9DE] group-hover:text-[#C5A66B] transition-colors leading-snug truncate"
                     title={sh.name}
                   >
                     {sh.name}
                   </h4>
+                  <p className="text-[11px] text-[#A9B99D] truncate mt-0.5">
+                    {sh.type === 'file' ? 'Arquivo' : 'Planilha'} · {isBoth99 ? '99' : front.label}
+                  </p>
                 </div>
               </div>
 

@@ -258,31 +258,140 @@ function readFileAsBase64(file: File): Promise<string> {
   });
 }
 
+function extractGoogleSheetInfo(rawUrl: string): {
+  ok: true;
+  pubId?: string;
+  sheetId?: string;
+  gid: string;
+} | {
+  ok: false;
+  error: string;
+} {
+  if (!rawUrl || typeof rawUrl !== 'string') {
+    return { ok: false, error: 'URL inválida.' };
+  }
+
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(rawUrl.trim());
+  } catch {
+    return { ok: false, error: 'Formato de URL inválido.' };
+  }
+
+  if (parsedUrl.protocol !== 'https:' || parsedUrl.hostname !== 'docs.google.com') {
+    return {
+      ok: false,
+      error: 'Informe um link válido do Google Sheets (https://docs.google.com/spreadsheets/...).',
+    };
+  }
+
+  const pubMatch = parsedUrl.pathname.match(/\/spreadsheets\/d\/e\/([a-zA-Z0-9-_]+)/);
+  const idMatch = parsedUrl.pathname.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  if (!pubMatch && !idMatch) {
+    return {
+      ok: false,
+      error: 'Não foi possível identificar o ID da planilha no link informado.',
+    };
+  }
+
+  const hashGidMatch = parsedUrl.hash.match(/gid=(\d+)/);
+  const gid = parsedUrl.searchParams.get('gid') || hashGidMatch?.[1] || '';
+
+  return {
+    ok: true,
+    pubId: pubMatch?.[1],
+    sheetId: pubMatch ? undefined : idMatch?.[1],
+    gid,
+  };
+}
+
+async function fetchGoogleSheetDirectInBrowser(
+  info: { pubId?: string; sheetId?: string; gid: string },
+): Promise<{ ok: boolean; csv?: string; requiresAuth?: boolean; error?: string }> {
+  const candidates = info.pubId
+    ? [
+        `https://docs.google.com/spreadsheets/d/e/${info.pubId}/pub?output=csv${
+          info.gid ? `&gid=${info.gid}&single=true` : ''
+        }&_t=${Date.now()}`,
+      ]
+    : [
+        `https://docs.google.com/spreadsheets/d/${info.sheetId}/gviz/tq?tqx=out:csv${
+          info.gid ? `&gid=${info.gid}` : ''
+        }`,
+        `https://docs.google.com/spreadsheets/d/${info.sheetId}/export?format=csv${
+          info.gid ? `&gid=${info.gid}` : ''
+        }&_t=${Date.now()}`,
+      ];
+
+  let sawLoginWall = false;
+
+  for (const candidateUrl of candidates) {
+    try {
+      const response = await fetch(candidateUrl, { redirect: 'follow' });
+      const contentType = response.headers.get('content-type') || '';
+      const finalUrl = response.url || '';
+      const bodyText = await response.text();
+
+      if (
+        !response.ok ||
+        finalUrl.includes('accounts.google.com') ||
+        contentType.includes('text/html') ||
+        bodyText.trimStart().startsWith('<!DOCTYPE') ||
+        bodyText.trimStart().startsWith('<html')
+      ) {
+        sawLoginWall = true;
+        continue;
+      }
+
+      if (bodyText.trim()) {
+        return { ok: true, csv: bodyText };
+      }
+    } catch {
+      // Blocked by CORS or network when sheet requires Google login
+    }
+  }
+
+  return {
+    ok: false,
+    requiresAuth: true,
+    error: sawLoginWall
+      ? 'Esta planilha exige login corporativo (restrita). Selecione as linhas no Google Sheets (Ctrl+C) e cole abaixo (Ctrl+V), ou importe o arquivo CSV.'
+      : 'Não foi possível ler o link direto (verifique se a planilha está liberada como "Qualquer pessoa com o link" ou publicada na web). Se preferir, copie as linhas (Ctrl+C) e cole abaixo (Ctrl+V) ou clique em "Subir CSV".',
+  };
+}
+
 export async function syncGoogleSheetUrl(
   url: string,
 ): Promise<{ ok: boolean; csv?: string; requiresAuth?: boolean; error?: string }> {
+  const parsed = extractGoogleSheetInfo(url);
+  if (!parsed.ok) {
+    return { ok: false, error: parsed.error };
+  }
+
   try {
     const response = await fetch('/api/sync-google-sheet', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ url }),
     });
-    const data = (await response.json()) as {
-      ok?: boolean;
-      csv?: string;
-      requiresAuth?: boolean;
-      error?: string;
-    };
-    return {
-      ok: Boolean(data.ok),
-      csv: data.csv,
-      requiresAuth: data.requiresAuth,
-      error: data.error,
-    };
+    const contentType = response.headers.get('content-type') || '';
+    if (contentType.includes('application/json')) {
+      const data = (await response.json()) as {
+        ok?: boolean;
+        csv?: string;
+        requiresAuth?: boolean;
+        error?: string;
+      };
+      return {
+        ok: Boolean(data.ok),
+        csv: data.csv,
+        requiresAuth: data.requiresAuth,
+        error: data.error,
+      };
+    }
   } catch {
-    return {
-      ok: false,
-      error: 'Erro ao conectar com o servidor local para ler a planilha.',
-    };
+    // Static host (e.g. GitHub Pages) has no /api server — fall back to direct browser fetch
   }
+
+  return fetchGoogleSheetDirectInBrowser(parsed);
 }
