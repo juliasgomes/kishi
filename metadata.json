@@ -1,0 +1,8 @@
+{
+  "name": "KISHI",
+  "description": "Workspace operacional para gestão de tarefas, planilhas e canais.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

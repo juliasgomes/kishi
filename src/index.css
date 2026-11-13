@@ -1,0 +1,84 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --color-kishi-bg: #0f1512;
+  --color-kishi-deep: #0b100d;
+  --color-kishi-card: #151d18;
+  --color-kishi-card-hover: #1b251f;
+  --color-kishi-border: #777F89;
+  --color-kishi-text: #EDE9DE;
+  --color-kishi-muted: #A9B99D;
+  --color-kishi-accent: #C5A66B;
+  --color-kishi-accent-hover: #d5b880;
+  --color-kishi-sand: #777F89;
+
+  --font-sans: "Plus Jakarta Sans", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", monospace;
+  --font-kishi: "Montserrat", system-ui, sans-serif;
+}
+
+@layer base {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #777F89 #0f1512;
+  }
+
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: #0f1512;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: #777F89;
+    border-radius: 4px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: #A9B99D;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    background-color: #0f1512;
+    color: #EDE9DE;
+    font-family: "Plus Jakarta Sans", system-ui, sans-serif;
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+.brand-logo-container {
+  transition: transform 0.28s cubic-bezier(0.34, 1.56, 0.64, 1), border-color 0.2s ease, box-shadow 0.25s ease;
+}
+
+.brand-logo-container:hover {
+  transform: scale(1.08);
+  box-shadow: 0 0 20px rgba(197, 166, 107, 0.25);
+  border-color: #C5A66B;
+}
+
+.interactive-card {
+  transition: transform 0.18s cubic-bezier(0.16, 1, 0.3, 1), border-color 0.18s ease, background-color 0.18s ease;
+}
+
+.interactive-card:hover {
+  transform: translateY(-1px);
+  border-color: rgba(169, 185, 157, 0.65);
+}
+
+.btn-press {
+  transition: transform 0.12s cubic-bezier(0.16, 1, 0.3, 1), background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.btn-press:active {
+  transform: scale(0.97);
+}

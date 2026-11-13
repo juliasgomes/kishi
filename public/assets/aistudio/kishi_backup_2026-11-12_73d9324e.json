@@ -1,0 +1,117 @@
+{
+  "lastDateStr": "12/11/2026",
+  "user": {
+    "name": "Júlia",
+    "initial": "J",
+    "role": "Operação 99 Food & Rides"
+  },
+  "sheets": [
+    {
+      "id": "sh_1794498227061",
+      "name": "Overview",
+      "category": "Canais Externos",
+      "type": "link",
+      "url": "https://datahub-frontend.icymoss-445c9a74.brazilsouth.azurecontainerapps.io/",
+      "note": "Planilha / Link Salvo"
+    },
+    {
+      "id": "sh_1794498211463",
+      "name": "DataHub",
+      "category": "Canais Externos",
+      "type": "link",
+      "url": "https://www.99datahub.com/dashboard/usuario",
+      "note": "Planilha / Link Salvo"
+    },
+    {
+      "id": "sh_1794412966445",
+      "name": "Plano de Midia",
+      "category": "99 Food",
+      "type": "link",
+      "url": "https://docs.google.com/spreadsheets/d/1IHdOn9ErB1_bFoIDFkyGCZOqZCOSK-c2ydLzW_PI61M/edit?gid=1918818473#gid=1918818473",
+      "note": "Planilha / Link Salvo"
+    },
+    {
+      "id": "sh_1794397711803",
+      "name": "Base para Organizar Extração Manual",
+      "category": "99 Rides",
+      "type": "link",
+      "url": "https://docs.google.com/spreadsheets/d/1o-6fyy51Lc0ifmhcr57u40sQY-KNCzBfl87DX65VE4A/edit?gid=768150551#gid=768150551",
+      "note": "Planilha / Link Salvo"
+    },
+    {
+      "id": "sh_1794397429018",
+      "name": "Base de Dados",
+      "category": "99 Rides",
+      "type": "link",
+      "url": "https://docs.google.com/spreadsheets/d/1yPxoTgoDSxgHABrCrtKISYkIB9ExEUDRankpqlFRchA/edit?gid=1207616124#gid=1207616124",
+      "note": "Planilha / Link Salvo"
+    },
+    {
+      "id": "sh_1794397366214",
+      "name": "Plano de Midia",
+      "category": "99 Rides",
+      "type": "link",
+      "url": "https://docs.google.com/spreadsheets/d/17cA5uXGpcvZGCjOFiY3rrPJP0hFfUmvvHlgNoNJEHnU/edit?gid=104758705#gid=104758705",
+      "note": "Planilha / Link Salvo"
+    },
+    {
+      "id": "sh_1794397244228",
+      "name": "Canais Externos",
+      "category": "99 Rides",
+      "type": "link",
+      "url": "https://drive.google.com/drive/folders/1mKg4MpRAgYCWC4D7QWnw9AKMDA-jBOOc",
+      "note": "Planilha / Link Salvo"
+    }
+  ],
+  "channels": {
+    "rides": {
+      "common": [
+        {
+          "title": "Conferir se relatórios da semana já estão no drive da CPB",
+          "done": false
+        },
+        {
+          "title": "Validar divergências na planilha de canais externos",
+          "done": false
+        },
+        {
+          "title": "Conferir se a base de PAX e DRV está atualizada",
+          "done": false
+        }
+      ],
+      "internos": [],
+      "externos": [
+        {
+          "name": "UOL",
+          "url": "https://docs.google.com/spreadsheets/d/1MzH-MI4Z7UEFBtrFL4dLBRKqjK4xW93a/edit?gid=1478339447#gid=1478339447",
+          "type": "Externo"
+        },
+        {
+          "name": "Logan",
+          "url": "https://docs.google.com/spreadsheets/d/1CV6i5AJk3xYDU45vMRZwInYsUZ5CdnhR/edit?gid=1625648334#gid=1625648334",
+          "type": "Externo"
+        }
+      ]
+    },
+    "food": {
+      "common": [
+        {
+          "title": "Verificar planilha de Food no Google Sheets",
+          "done": false
+        },
+        {
+          "title": "Conferir divergências entre planos de mídia e plataformas",
+          "done": false
+        },
+        {
+          "title": "Checar pastas de influenciadores e parceiros locais",
+          "done": false
+        }
+      ],
+      "internos": [],
+      "externos": []
+    }
+  },
+  "tasks": [],
+  "history": []
+}
